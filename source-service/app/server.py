@@ -13,6 +13,8 @@ from pydantic import BaseModel
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from app.current_procedure import lookup
+from app.realtime_contract import LookupRequest, LookupResult
 from app.store import SourceStoreError, SourceVersionStore
 
 mcp = MCPServer(
@@ -96,6 +98,31 @@ def manage_source_update(
         return SourceToolResult(status="OK", snapshot=snapshot)
     except SourceStoreError as exc:
         return SourceToolResult(status="ERROR", error=str(exc))
+
+
+@mcp.tool(structured_output=True)
+async def lookup_current_procedure(
+    procedure_id: str,
+    procedure_name: str,
+    field: str,
+    jurisdiction: str,
+    as_of: str,
+) -> LookupResult:
+    """Read current official DVC information after caller obtains user consent.
+
+    This separate tool never stages, reviews, publishes, or mutates source data.
+    """
+    request = LookupRequest(
+        procedure_id=procedure_id,
+        procedure_name=procedure_name,
+        field=field,
+        jurisdiction=jurisdiction,
+        as_of=as_of,
+    )
+    return await lookup(
+        request,
+        enabled=os.environ.get("G5_REALTIME_MCP_ENABLED", "false").lower() == "true",
+    )
 
 
 @mcp.custom_route("/health", methods=["GET"])
