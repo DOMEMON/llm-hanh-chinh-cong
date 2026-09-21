@@ -29,10 +29,11 @@ def is_serving_candidate(procedure_id: str) -> bool:
     return procedure_id not in PREFERRED_PROCEDURES
 
 
-def needs_realtime_offer(procedure_id: str | None, fields: set[str]) -> bool:
-    """Flag source-sensitive time/place answers for an explicit future MCP check."""
-
-    return bool(
-        preferred_procedure_id(procedure_id) in REALTIME_REVIEW_PROCEDURES
-        and fields & REALTIME_REVIEW_FIELDS
-    )
+def needs_realtime_offer(
+    procedure_id: str | None,
+    fields: set[str],
+    *,
+    local_missing: bool = False,
+) -> bool:
+    """Offer current lookup for time/place or missing local data, after identity resolution."""
+    return bool(procedure_id and (fields & REALTIME_REVIEW_FIELDS or local_missing))

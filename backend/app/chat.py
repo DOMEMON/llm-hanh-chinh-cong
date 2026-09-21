@@ -12,10 +12,10 @@ from app.config import get_settings
 from app.db import engine
 from app.errors import APIError
 from app.models import Conversation, Message, utcnow
-from app.rag.catalog_policy import needs_realtime_offer
 from app.rag.corpus import CorpusError
 from app.rag.g3.runtime import load_active_dataset
 from app.rag.g4.context import prepare_turn
+from app.rag.g5 import realtime
 from app.rag.g5.intent_context import (
     IntentContextState,
     load_context,
@@ -26,6 +26,7 @@ from app.rag.g5.intent_context import (
     record_grounded_turn,
     to_legacy_context,
 )
+from app.rag.g5.source_mcp import MCPSourceUpdateClient
 from app.rag.g5.topic_gate import decide_topic
 from app.rag.grounding import answer_with_rag
 from app.rag.schemas import Filters, RetrievalInput
@@ -153,6 +154,7 @@ async def send_message(
             grounding = None
             next_context = None
             policy_answer = None
+            realtime_handled = False
             if get_settings().rag_enabled:
                 retrieval_query = RetrievalInput(
                     query=body.content,
@@ -172,8 +174,37 @@ async def send_message(
                             conversation.rag_context,
                             corpus_version=data.version,
                         )
-                        use_legacy = not settings.g5_intent_context_enabled
-                        if settings.g5_intent_context_enabled:
+                        had_offer = previous_model.pending_realtime is not None
+                        consent, pending = realtime.consume(
+                            previous_model,
+                            body.content,
+                            body.retrieval_filters,
+                            enabled=settings.g5_realtime_mcp_enabled,
+                        )
+                        if had_offer:
+                            # Durable consumption under the existing conversation lock.
+                            # A retry after a crash cannot issue this web lookup twice.
+                            conversation.rag_context = previous_model.model_dump(mode="json")
+                            await db.commit()
+                        if consent:
+                            realtime_handled = True
+                            next_context = previous_model
+                            current_client = None
+                            if consent == "yes":
+                                try:
+                                    current_client = MCPSourceUpdateClient(
+                                        url=settings.g5_source_mcp_url,
+                                        timeout_seconds=settings.g5_realtime_mcp_timeout_seconds,
+                                    )
+                                except ValueError:
+                                    pass  # Invalid optional endpoint also falls back to local.
+                            policy_answer, grounding = await realtime.resolve(
+                                pending,
+                                consent,
+                                current_client,
+                            )
+                        use_legacy = not realtime_handled and not settings.g5_intent_context_enabled
+                        if settings.g5_intent_context_enabled and not realtime_handled:
                             candidates = procedure_candidates(data)
                             try:
                                 topic_decision = await decide_topic(
@@ -263,22 +294,13 @@ async def send_message(
                         request_id,
                         ai,
                     )
-                    if (
-                        isinstance(next_context, IntentContextState)
-                        and grounding
-                        and needs_realtime_offer(
-                            next_context.procedure_id,
-                            {
-                                item.get("field")
-                                for item in grounding.get("checklist") or []
-                                if isinstance(item, dict) and item.get("field")
-                            },
-                        )
-                    ):
-                        answer += (
-                            "\n\nBạn có muốn kiểm tra thông tin hiện tại trên Cổng Dịch vụ "
-                            "công Quốc gia không? Chức năng đối chiếu thời gian thực sẽ được "
-                            "kết nối qua MCP ở bước tiếp theo."
+                    if isinstance(next_context, IntentContextState):
+                        answer = realtime.offer(
+                            next_context,
+                            data,
+                            answer,
+                            grounding,
+                            enabled=get_settings().g5_realtime_mcp_enabled,
                         )
             else:
                 answer = await ai.generate(
@@ -290,7 +312,7 @@ async def send_message(
             conversation.updated_at = utcnow()
             await db.commit()
             raise
-        if isinstance(next_context, IntentContextState):
+        if isinstance(next_context, IntentContextState) and not realtime_handled:
             next_context = record_grounded_turn(
                 next_context,
                 user_query=body.content,

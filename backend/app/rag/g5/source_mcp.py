@@ -12,6 +12,7 @@ from mcp import Client
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from app.rag.g3.validator import SECTIONS
+from app.rag.g5.realtime_contract import LookupRequest, LookupResult
 from app.rag.schemas import Evidence, EvidenceBundle
 
 DEFAULT_ALLOWED_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", "source-service"})
@@ -100,6 +101,36 @@ class MCPSourceUpdateClient:
             return update
         except Exception:
             # Optional update transport fails open to the immutable reviewed corpus.
+            return None
+
+    async def lookup_current(self, request: LookupRequest) -> LookupResult | None:
+        """A separate, unreviewed read path. Caller must consume explicit consent first."""
+        try:
+            async with asyncio.timeout(self.timeout_seconds):
+                async with Client(self.url, read_timeout_seconds=self.timeout_seconds) as client:
+                    result = await client.call_tool(
+                        "lookup_current_procedure",
+                        request.model_dump(mode="json"),
+                        read_timeout_seconds=self.timeout_seconds,
+                    )
+            payload = result.structured_content
+            if result.is_error or not isinstance(payload, dict):
+                return None
+            if set(payload) == {"result"}:
+                payload = payload["result"]
+            answer = LookupResult.model_validate(payload)
+            now = datetime.now(timezone.utc)
+            if (
+                answer.procedure_id != request.procedure_id
+                or answer.field != request.field
+                or answer.jurisdiction != request.jurisdiction
+                or request.as_of != now.date()
+                or not -30 <= (now - answer.checked_at).total_seconds() <= 120
+                or (answer.status == "FOUND" and answer.source_title != request.procedure_name)
+            ):
+                return None
+            return answer
+        except Exception:
             return None
 
 

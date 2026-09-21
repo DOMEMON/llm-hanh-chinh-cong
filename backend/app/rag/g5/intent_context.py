@@ -11,6 +11,7 @@ from pydantic import Field, model_validator
 from app.rag.catalog_policy import is_serving_candidate, preferred_procedure_id
 from app.rag.g3.retrieval import fields_for_query, normalize, retrieve
 from app.rag.g4.context import ConversationContext
+from app.rag.g5.realtime import PendingLookup
 from app.rag.g5.topic_gate import TopicDecision
 from app.rag.schemas import ID, Filters, RetrievalInput, Scope, Strict, Text
 
@@ -141,6 +142,7 @@ class IntentContextState(Strict):
     ) = None
     source_message_ids: dict[str, ID] = Field(default_factory=dict)
     applied_message_ids: list[ID] = Field(default_factory=list, max_length=64)
+    pending_realtime: PendingLookup | None = None
     # Backend-owned episodic memory. These fields are never trusted model output.
     # They are derived from successful grounded answers and explicit user statements.
     last_answered_fields: list[FieldIntent] = Field(default_factory=list, max_length=8)

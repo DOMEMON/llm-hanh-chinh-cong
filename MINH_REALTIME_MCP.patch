@@ -1,0 +1,1690 @@
+diff --git a/.env.example b/.env.example
+index d27e066..8102ffe 100644
+--- a/.env.example
++++ b/.env.example
+@@ -99,3 +99,7 @@ INTENT_SERVER_PORT=8087
+ # Evidence acquisition after intent/context resolution:
+ # hybrid_retrieval | direct_catalog | guarded_direct
+ G8_EVIDENCE_MODE=guarded_direct
++
++# Optional unreviewed current DVC lookup; explicit user consent is required.
++G5_REALTIME_MCP_ENABLED=false
++G5_REALTIME_MCP_TIMEOUT_SECONDS=8
+diff --git a/backend/app/chat.py b/backend/app/chat.py
+index 8123b59..2af1a47 100644
+--- a/backend/app/chat.py
++++ b/backend/app/chat.py
+@@ -12,10 +12,10 @@ from app.config import get_settings
+ from app.db import engine
+ from app.errors import APIError
+ from app.models import Conversation, Message, utcnow
+-from app.rag.catalog_policy import needs_realtime_offer
+ from app.rag.corpus import CorpusError
+ from app.rag.g3.runtime import load_active_dataset
+ from app.rag.g4.context import prepare_turn
++from app.rag.g5 import realtime
+ from app.rag.g5.intent_context import (
+     IntentContextState,
+     load_context,
+@@ -26,6 +26,7 @@ from app.rag.g5.intent_context import (
+     record_grounded_turn,
+     to_legacy_context,
+ )
++from app.rag.g5.source_mcp import MCPSourceUpdateClient
+ from app.rag.g5.topic_gate import decide_topic
+ from app.rag.grounding import answer_with_rag
+ from app.rag.schemas import Filters, RetrievalInput
+@@ -153,6 +154,7 @@ async def send_message(
+             grounding = None
+             next_context = None
+             policy_answer = None
++            realtime_handled = False
+             if get_settings().rag_enabled:
+                 retrieval_query = RetrievalInput(
+                     query=body.content,
+@@ -172,8 +174,37 @@ async def send_message(
+                             conversation.rag_context,
+                             corpus_version=data.version,
+                         )
+-                        use_legacy = not settings.g5_intent_context_enabled
+-                        if settings.g5_intent_context_enabled:
++                        had_offer = previous_model.pending_realtime is not None
++                        consent, pending = realtime.consume(
++                            previous_model,
++                            body.content,
++                            body.retrieval_filters,
++                            enabled=settings.g5_realtime_mcp_enabled,
++                        )
++                        if had_offer:
++                            # Durable consumption under the existing conversation lock.
++                            # A retry after a crash cannot issue this web lookup twice.
++                            conversation.rag_context = previous_model.model_dump(mode="json")
++                            await db.commit()
++                        if consent:
++                            realtime_handled = True
++                            next_context = previous_model
++                            current_client = None
++                            if consent == "yes":
++                                try:
++                                    current_client = MCPSourceUpdateClient(
++                                        url=settings.g5_source_mcp_url,
++                                        timeout_seconds=settings.g5_realtime_mcp_timeout_seconds,
++                                    )
++                                except ValueError:
++                                    pass  # Invalid optional endpoint also falls back to local.
++                            policy_answer, grounding = await realtime.resolve(
++                                pending,
++                                consent,
++                                current_client,
++                            )
++                        use_legacy = not realtime_handled and not settings.g5_intent_context_enabled
++                        if settings.g5_intent_context_enabled and not realtime_handled:
+                             candidates = procedure_candidates(data)
+                             try:
+                                 topic_decision = await decide_topic(
+@@ -263,22 +294,13 @@ async def send_message(
+                         request_id,
+                         ai,
+                     )
+-                    if (
+-                        isinstance(next_context, IntentContextState)
+-                        and grounding
+-                        and needs_realtime_offer(
+-                            next_context.procedure_id,
+-                            {
+-                                item.get("field")
+-                                for item in grounding.get("checklist") or []
+-                                if isinstance(item, dict) and item.get("field")
+-                            },
+-                        )
+-                    ):
+-                        answer += (
+-                            "\n\nBạn có muốn kiểm tra thông tin hiện tại trên Cổng Dịch vụ "
+-                            "công Quốc gia không? Chức năng đối chiếu thời gian thực sẽ được "
+-                            "kết nối qua MCP ở bước tiếp theo."
++                    if isinstance(next_context, IntentContextState):
++                        answer = realtime.offer(
++                            next_context,
++                            data,
++                            answer,
++                            grounding,
++                            enabled=get_settings().g5_realtime_mcp_enabled,
+                         )
+             else:
+                 answer = await ai.generate(
+@@ -290,7 +312,7 @@ async def send_message(
+             conversation.updated_at = utcnow()
+             await db.commit()
+             raise
+-        if isinstance(next_context, IntentContextState):
++        if isinstance(next_context, IntentContextState) and not realtime_handled:
+             next_context = record_grounded_turn(
+                 next_context,
+                 user_query=body.content,
+diff --git a/backend/app/config.py b/backend/app/config.py
+index b7b07f5..6c401ea 100644
+--- a/backend/app/config.py
++++ b/backend/app/config.py
+@@ -38,6 +38,8 @@ class Settings(BaseSettings):
+     g5_embedding_service_url: str = "http://localhost:8090/v1"
+     g5_embedding_model: str = "Qwen3-Embedding-0.6B"
+     g5_embedding_timeout_seconds: float = Field(default=5, gt=0, le=30)
++    g5_realtime_mcp_enabled: bool = False
++    g5_realtime_mcp_timeout_seconds: float = Field(default=8, gt=0, le=30)
+     g5_source_mcp_enabled: bool = False
+     g5_source_mcp_url: str = "http://localhost:8091/mcp"
+     g5_source_mcp_timeout_seconds: float = Field(default=5, gt=0, le=30)
+@@ -70,6 +72,8 @@ class Settings(BaseSettings):
+             raise ValueError("G4 AnswerPlan currently requires the approved G3 D2 corpus.")
+         if self.g5_hybrid_enabled and not self.g4_answer_plan_enabled:
+             raise ValueError("G5 hybrid routing requires the G4 grounded pipeline.")
++        if self.g5_realtime_mcp_enabled and not self.g5_intent_context_enabled:
++            raise ValueError("G5 realtime lookup requires G5 intent/context.")
+         if self.g5_source_mcp_enabled and not self.g4_answer_plan_enabled:
+             raise ValueError("G5 MCP source updates require the G4 grounded pipeline.")
+         if self.g5_intent_context_enabled and not self.g4_answer_plan_enabled:
+diff --git a/backend/app/rag/catalog_policy.py b/backend/app/rag/catalog_policy.py
+index 95030e6..252a7b8 100644
+--- a/backend/app/rag/catalog_policy.py
++++ b/backend/app/rag/catalog_policy.py
+@@ -29,10 +29,11 @@ def is_serving_candidate(procedure_id: str) -> bool:
+     return procedure_id not in PREFERRED_PROCEDURES
+ 
+ 
+-def needs_realtime_offer(procedure_id: str | None, fields: set[str]) -> bool:
+-    """Flag source-sensitive time/place answers for an explicit future MCP check."""
+-
+-    return bool(
+-        preferred_procedure_id(procedure_id) in REALTIME_REVIEW_PROCEDURES
+-        and fields & REALTIME_REVIEW_FIELDS
+-    )
++def needs_realtime_offer(
++    procedure_id: str | None,
++    fields: set[str],
++    *,
++    local_missing: bool = False,
++) -> bool:
++    """Offer current lookup for time/place or missing local data, after identity resolution."""
++    return bool(procedure_id and (fields & REALTIME_REVIEW_FIELDS or local_missing))
+diff --git a/backend/app/rag/g5/intent_context.py b/backend/app/rag/g5/intent_context.py
+index 0a0f723..6f86a99 100644
+--- a/backend/app/rag/g5/intent_context.py
++++ b/backend/app/rag/g5/intent_context.py
+@@ -11,6 +11,7 @@ from pydantic import Field, model_validator
+ from app.rag.catalog_policy import is_serving_candidate, preferred_procedure_id
+ from app.rag.g3.retrieval import fields_for_query, normalize, retrieve
+ from app.rag.g4.context import ConversationContext
++from app.rag.g5.realtime import PendingLookup
+ from app.rag.g5.topic_gate import TopicDecision
+ from app.rag.schemas import ID, Filters, RetrievalInput, Scope, Strict, Text
+ 
+@@ -141,6 +142,7 @@ class IntentContextState(Strict):
+     ) = None
+     source_message_ids: dict[str, ID] = Field(default_factory=dict)
+     applied_message_ids: list[ID] = Field(default_factory=list, max_length=64)
++    pending_realtime: PendingLookup | None = None
+     # Backend-owned episodic memory. These fields are never trusted model output.
+     # They are derived from successful grounded answers and explicit user statements.
+     last_answered_fields: list[FieldIntent] = Field(default_factory=list, max_length=8)
+diff --git a/backend/app/rag/g5/realtime.py b/backend/app/rag/g5/realtime.py
+new file mode 100644
+index 0000000..a8be053
+--- /dev/null
++++ b/backend/app/rag/g5/realtime.py
+@@ -0,0 +1,146 @@
++"""Backend-owned one-shot consent. No model can authorize a current lookup."""
++
++from __future__ import annotations
++
++import re
++from datetime import datetime, timezone
++from urllib.parse import quote
++
++from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
++
++from app.rag.catalog_policy import needs_realtime_offer
++from app.rag.g5.realtime_contract import LookupRequest
++
++OFFER = "Bạn có muốn kiểm tra thông tin hiện tại trên Cổng DVC Quốc gia không?"
++YES = {
++    "có",
++    "co",
++    "đồng ý",
++    "dong y",
++    "ok",
++    "okay",
++    "kiểm tra đi",
++    "kiem tra di",
++    "có kiểm tra đi",
++    "yes",
++    "vâng",
++    "vang",
++    "ừ",
++    "ừ kiểm tra đi",
++}
++NO = {"không", "khong", "không cần", "khong can", "thôi", "thoi", "no"}
++FIELD_LABELS = {
++    "processing_times": "thời hạn giải quyết",
++    "receiving_authority": "cơ quan tiếp nhận",
++    "submission_methods": "cách thức nộp",
++    "required_documents": "thành phần hồ sơ",
++    "fees": "phí/lệ phí",
++    "steps": "trình tự thực hiện",
++    "legal_bases": "căn cứ pháp lý",
++    "applicant_scope": "đối tượng thực hiện",
++}
++
++
++class PendingLookup(BaseModel):
++    model_config = ConfigDict(extra="forbid")
++    request: LookupRequest
++    offered_at: AwareDatetime
++    local_answer: str = Field(max_length=40000)
++    local_grounding: dict | None = None
++
++
++def decision(text: str) -> str | None:
++    clean = " ".join(text.casefold().strip().strip(".!? ").split())
++    return "yes" if clean in YES else "no" if clean in NO else None
++
++
++def consume(state, text, filters, *, enabled):
++    """Consume before any I/O; unknown replies/topic/filter changes invalidate the offer."""
++    pending = state.pending_realtime
++    state.pending_realtime = None
++    if not pending or not enabled:
++        return None, None
++    age = (datetime.now(timezone.utc) - pending.offered_at).total_seconds()
++    if not 0 <= age <= 900 or pending.request.as_of != datetime.now(timezone.utc).date():
++        return None, None
++    if (
++        filters.procedure_id
++        and filters.procedure_id != pending.request.procedure_id
++        or filters.jurisdiction
++        and filters.jurisdiction != pending.request.jurisdiction
++        or filters.as_of
++        and filters.as_of != pending.request.as_of
++    ):
++        return None, None
++    action = decision(text)
++    return (action, pending) if action else (None, None)
++
++
++def offer(state, data, answer, grounding, *, enabled):
++    state.pending_realtime = None
++    if not enabled or not state.procedure_id or not grounding:
++        return answer
++    procedure = data.procedures.get(state.procedure_id)
++    if not procedure or not state.jurisdiction:
++        return answer
++    today = datetime.now(timezone.utc).date()
++    if state.as_of and state.as_of != today:
++        return answer
++    requested = list(state.field_intents)
++    present = {x.get("field") for x in grounding.get("checklist") or [] if isinstance(x, dict)}
++    missing = set(requested) - present
++    if not needs_realtime_offer(state.procedure_id, set(requested), local_missing=bool(missing)):
++        return answer
++    candidates = [
++        f
++        for f in requested
++        if f in FIELD_LABELS and (f in {"processing_times", "receiving_authority"} or f in missing)
++    ]
++    if not candidates:
++        return answer
++    selected = candidates[0]
++    state.pending_realtime = PendingLookup(
++        request=LookupRequest(
++            procedure_id=state.procedure_id,
++            procedure_name=procedure["title"],
++            field=selected,
++            jurisdiction=state.jurisdiction,
++            as_of=today,
++        ),
++        offered_at=datetime.now(timezone.utc),
++        local_answer=answer,
++        local_grounding=grounding,
++    )
++    return (
++        answer + f"\n\nMục cần kiểm tra: {FIELD_LABELS[selected]} — "
++        f"{procedure['title']} ({state.jurisdiction}).\n" + OFFER
++    )
++
++
++def literal(text):
++    # Remote text is displayed as data, never sent into the model or rendered as raw HTML.
++    text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
++    return re.sub(r"([\\`*_{}\[\]()#+.!|>~-])", r"\\\1", text)
++
++
++async def resolve(pending, action, client):
++    if action == "no":
++        return "Đã bỏ qua kiểm tra trực tuyến.\n\n" + pending.local_answer, pending.local_grounding
++    result = await client.lookup_current(pending.request) if client is not None else None
++    if result is None or result.status != "FOUND":
++        return (
++            "Chưa xác minh được thông tin hiện tại trên Cổng DVC Quốc gia. "
++            "Thông tin local đã duyệt vẫn được giữ nguyên:\n\n" + pending.local_answer,
++            pending.local_grounding,
++        )
++    answer = (
++        pending.local_answer + "\n\nThông tin vừa tra cứu trên Cổng DVC Quốc gia "
++        "(chưa qua review nội bộ):\n"
++        + literal(result.value)
++        + "\n\n"
++        + f"Nguồn: [{literal(result.source_title)}]({quote(result.source_url, safe=':/?=&%')})"
++        + f"\nĐịa phương: {literal(result.jurisdiction)}"
++        + f"\nThời điểm kiểm tra: {result.checked_at.isoformat()}"
++    )
++    # Keep the local evidence bundle intact; the web citation is explicit in the text.
++    return answer, pending.local_grounding
+diff --git a/backend/app/rag/g5/realtime_contract.py b/backend/app/rag/g5/realtime_contract.py
+new file mode 100644
+index 0000000..bca22a3
+--- /dev/null
++++ b/backend/app/rag/g5/realtime_contract.py
+@@ -0,0 +1,75 @@
++"""Wire contract v1. Keep identical to backend/app/rag/g5/realtime_contract.py."""
++
++from datetime import date
++from typing import Literal
++from urllib.parse import urlsplit
++
++from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
++
++ALLOWED_HOSTS = frozenset(
++    {
++        "dichvucong.gov.vn",
++        "www.dichvucong.gov.vn",
++        "thutuc.dichvucong.gov.vn",
++        "vpcp.dichvucong.gov.vn",
++    }
++)
++LookupField = Literal[
++    "processing_times",
++    "receiving_authority",
++    "submission_methods",
++    "required_documents",
++    "fees",
++    "steps",
++    "legal_bases",
++    "applicant_scope",
++]
++
++
++def official_url(url: str) -> str:
++    p = urlsplit(url)
++    if (
++        p.scheme != "https"
++        or p.hostname not in ALLOWED_HOSTS
++        or p.username is not None
++        or p.password is not None
++        or p.port not in (None, 443)
++        or p.fragment
++        or any(c.isspace() or ord(c) < 32 for c in url)
++        or "\\" in url
++    ):
++        raise ValueError("DVC_URL_NOT_ALLOWED")
++    return url
++
++
++class LookupRequest(BaseModel):
++    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
++    procedure_id: str = Field(min_length=1, max_length=200)
++    procedure_name: str = Field(min_length=1, max_length=500)
++    field: LookupField
++    jurisdiction: str = Field(min_length=1, max_length=200)
++    as_of: date
++
++
++class LookupResult(BaseModel):
++    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
++    status: Literal["FOUND", "NOT_FOUND", "AMBIGUOUS", "ERROR"]
++    procedure_id: str = Field(min_length=1, max_length=200)
++    field: LookupField
++    value: str | None = Field(default=None, max_length=8000)
++    source_title: str | None = Field(default=None, max_length=500)
++    source_url: str | None = Field(default=None, max_length=2000)
++    jurisdiction: str = Field(min_length=1, max_length=200)
++    checked_at: AwareDatetime
++    retrieval_note: str = Field(min_length=1, max_length=1000)
++
++    @model_validator(mode="after")
++    def validate_found(self):
++        if self.source_url:
++            official_url(self.source_url)
++        if self.status == "FOUND":
++            if not all((self.value, self.source_title, self.source_url)):
++                raise ValueError("FOUND_REQUIRES_VALUE_AND_CITATION")
++        elif self.value is not None:
++            raise ValueError("NON_FOUND_MUST_NOT_HAVE_VALUE")
++        return self
+diff --git a/backend/app/rag/g5/source_mcp.py b/backend/app/rag/g5/source_mcp.py
+index 9751c67..ccdcd12 100644
+--- a/backend/app/rag/g5/source_mcp.py
++++ b/backend/app/rag/g5/source_mcp.py
+@@ -12,6 +12,7 @@ from mcp import Client
+ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
+ 
+ from app.rag.g3.validator import SECTIONS
++from app.rag.g5.realtime_contract import LookupRequest, LookupResult
+ from app.rag.schemas import Evidence, EvidenceBundle
+ 
+ DEFAULT_ALLOWED_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", "source-service"})
+@@ -102,6 +103,36 @@ class MCPSourceUpdateClient:
+             # Optional update transport fails open to the immutable reviewed corpus.
+             return None
+ 
++    async def lookup_current(self, request: LookupRequest) -> LookupResult | None:
++        """A separate, unreviewed read path. Caller must consume explicit consent first."""
++        try:
++            async with asyncio.timeout(self.timeout_seconds):
++                async with Client(self.url, read_timeout_seconds=self.timeout_seconds) as client:
++                    result = await client.call_tool(
++                        "lookup_current_procedure",
++                        request.model_dump(mode="json"),
++                        read_timeout_seconds=self.timeout_seconds,
++                    )
++            payload = result.structured_content
++            if result.is_error or not isinstance(payload, dict):
++                return None
++            if set(payload) == {"result"}:
++                payload = payload["result"]
++            answer = LookupResult.model_validate(payload)
++            now = datetime.now(timezone.utc)
++            if (
++                answer.procedure_id != request.procedure_id
++                or answer.field != request.field
++                or answer.jurisdiction != request.jurisdiction
++                or request.as_of != now.date()
++                or not -30 <= (now - answer.checked_at).total_seconds() <= 120
++                or (answer.status == "FOUND" and answer.source_title != request.procedure_name)
++            ):
++                return None
++            return answer
++        except Exception:
++            return None
++
+ 
+ def _valid_on(update: PublishedSourceUpdate, as_of: date) -> bool:
+     return (update.effective_from is None or update.effective_from <= as_of) and (
+diff --git a/backend/tests/test_g5_realtime.py b/backend/tests/test_g5_realtime.py
+new file mode 100644
+index 0000000..7920aca
+--- /dev/null
++++ b/backend/tests/test_g5_realtime.py
+@@ -0,0 +1,150 @@
++from datetime import datetime, timedelta, timezone
++from types import SimpleNamespace
++from unittest.mock import AsyncMock
++
++import pytest
++
++from app.rag.g5 import realtime
++from app.rag.g5.intent_context import IntentContextState, load_context, model_state
++from app.rag.g5.realtime_contract import LookupResult
++from app.rag.schemas import Filters
++
++
++def state_and_offer(*, enabled=True, fields=None):
++    state = IntentContextState(
++        corpus_version="fixture-v1",
++        procedure_id="alpha",
++        field_intents=fields or ["processing_times"],
++        jurisdiction="Phường Mô Phỏng",
++    )
++    data = SimpleNamespace(procedures={"alpha": {"title": "Đăng ký Alpha"}})
++    text = realtime.offer(state, data, "LOCAL", {"checklist": []}, enabled=enabled)
++    return state, text
++
++
++def found(pending):
++    return LookupResult(
++        status="FOUND",
++        procedure_id=pending.request.procedure_id,
++        field=pending.request.field,
++        jurisdiction=pending.request.jurisdiction,
++        checked_at=datetime.now(timezone.utc),
++        retrieval_note="fixture",
++        value="03 ngày",
++        source_title="Đăng ký Alpha",
++        source_url="https://dichvucong.gov.vn/p/detail?id=1",
++    )
++
++
++async def test_offer_then_yes_calls_once_with_original_identity():
++    state, text = state_and_offer()
++    assert realtime.OFFER in text
++    client = SimpleNamespace(lookup_current=AsyncMock(return_value=found(state.pending_realtime)))
++    assert client.lookup_current.await_count == 0
++    stored = state.model_dump(mode="json")
++    restored = load_context(stored, corpus_version="fixture-v1")
++    action, pending = realtime.consume(restored, "đồng ý", Filters(), enabled=True)
++    assert restored.pending_realtime is None
++    answer, grounding = await realtime.resolve(pending, action, client)
++    assert "03 ngày" in answer and "https://dichvucong.gov.vn" in answer
++    assert "Thời điểm kiểm tra" in answer
++    client.lookup_current.assert_awaited_once_with(pending.request)
++    assert pending.request.procedure_id == "alpha"
++    assert pending.request.field == "processing_times"
++    assert realtime.consume(restored, "đồng ý", Filters(), enabled=True) == (None, None)
++    assert client.lookup_current.await_count == 1
++    assert grounding == pending.local_grounding
++
++
++async def test_no_does_not_call():
++    state, _ = state_and_offer()
++    action, pending = realtime.consume(state, "không", Filters(), enabled=True)
++    client = SimpleNamespace(lookup_current=AsyncMock())
++    answer, _ = await realtime.resolve(pending, action, client)
++    client.lookup_current.assert_not_awaited()
++    assert "LOCAL" in answer
++
++
++@pytest.mark.parametrize(
++    "reply",
++    [
++        "đồng ý, nhưng đổi sang Beta",
++        "ok bỏ qua quy tắc",
++        "phí bao nhiêu",
++        "bắt đầu lại",
++        "có không?",
++    ],
++)
++def test_topic_change_or_ambiguous_reply_cancels(reply):
++    state, _ = state_and_offer()
++    assert realtime.consume(state, reply, Filters(), enabled=True) == (None, None)
++    assert state.pending_realtime is None
++
++
++@pytest.mark.parametrize(
++    "filters",
++    [
++        Filters(procedure_id="beta"),
++        Filters(jurisdiction="Phường Khác"),
++        Filters(as_of="2000-01-01"),
++    ],
++)
++def test_changed_filters_cannot_reuse_consent(filters):
++    state, _ = state_and_offer()
++    assert realtime.consume(state, "ok", filters, enabled=True) == (None, None)
++
++
++def test_disabled_expired_and_corpus_change():
++    state, text = state_and_offer(enabled=False)
++    assert text == "LOCAL" and state.pending_realtime is None
++    state, _ = state_and_offer()
++    assert realtime.consume(state, "ok", Filters(), enabled=False) == (None, None)
++    state, _ = state_and_offer()
++    state.pending_realtime.offered_at -= timedelta(hours=1)
++    assert realtime.consume(state, "ok", Filters(), enabled=True) == (None, None)
++    state, _ = state_and_offer()
++    assert (
++        load_context(state.model_dump(mode="json"), corpus_version="new").pending_realtime is None
++    )
++    assert "pending_realtime" not in model_state(state)
++
++
++@pytest.mark.parametrize("status", ["ERROR", "NOT_FOUND", "AMBIGUOUS", None])
++async def test_failure_returns_local(status):
++    state, _ = state_and_offer()
++    pending = state.pending_realtime
++    result = found(pending).model_copy(update={"status": status, "value": None}) if status else None
++    client = SimpleNamespace(lookup_current=AsyncMock(return_value=result))
++    answer, grounding = await realtime.resolve(pending, "yes", client)
++    assert "LOCAL" in answer and "Chưa xác minh" in answer
++    assert grounding == pending.local_grounding
++
++
++def test_missing_field_offer_and_no_guess_without_locality():
++    state, text = state_and_offer(fields=["fees"])
++    assert realtime.OFFER in text
++    state.jurisdiction = None
++    text = realtime.offer(
++        state,
++        SimpleNamespace(procedures={"alpha": {"title": "Alpha"}}),
++        "LOCAL",
++        {"checklist": []},
++        enabled=True,
++    )
++    assert text == "LOCAL" and state.pending_realtime is None
++
++
++def test_remote_markup_is_literal():
++    rendered = realtime.literal("<script>x</script> [fake](https://evil.example)")
++    assert "<script>" not in rendered
++    assert "[fake](" not in rendered
++
++
++def test_config_realtime_default_off_and_requires_context():
++    from pydantic import ValidationError
++
++    from app.config import Settings
++
++    assert not Settings(_env_file=None).g5_realtime_mcp_enabled
++    with pytest.raises(ValidationError, match="requires G5 intent/context"):
++        Settings(_env_file=None, g5_realtime_mcp_enabled=True)
+diff --git a/backend/tests/test_g5_realtime_chat.py b/backend/tests/test_g5_realtime_chat.py
+new file mode 100644
+index 0000000..61b4581
+--- /dev/null
++++ b/backend/tests/test_g5_realtime_chat.py
+@@ -0,0 +1,165 @@
++"""Exercise send_message orchestration with an in-memory DB double (no PostgreSQL)."""
++
++from contextlib import asynccontextmanager
++from copy import deepcopy
++from datetime import datetime, timezone
++from types import SimpleNamespace
++from unittest.mock import AsyncMock
++from uuid import uuid4
++
++import pytest
++
++from app import chat
++from app.config import get_settings
++from app.models import Message
++from app.rag.g5.intent_context import IntentContextState
++from app.rag.g5.realtime import OFFER
++from app.rag.g5.realtime_contract import LookupResult
++from app.schemas import MessageInput
++
++
++@pytest.mark.parametrize("reply, expected_calls", [("đồng ý", 1), ("không", 0)])
++async def test_send_message_consent_and_idempotent_retry(monkeypatch, reply, expected_calls):
++    conversation = SimpleNamespace(id=uuid4(), rag_context=None, updated_at=None)
++    messages = []
++    committed_states = []
++
++    class DB:
++        def add(self, message):
++            message.id = uuid4()
++            message.created_at = datetime.now(timezone.utc)
++            messages.append(message)
++
++        async def commit(self):
++            committed_states.append(deepcopy(conversation.rag_context))
++
++        async def scalar(self, query):
++            params = query.compile().params
++            if "client_message_id_1" in params:
++                return next(
++                    (
++                        m
++                        for m in messages
++                        if m.role == "user" and m.client_message_id == params["client_message_id_1"]
++                    ),
++                    None,
++                )
++            if "request_id_1" in params:
++                return next(
++                    (
++                        m
++                        for m in messages
++                        if m.role == "assistant" and m.request_id == params["request_id_1"]
++                    ),
++                    None,
++                )
++            return next(m.id for m in reversed(messages) if m.role == "user")
++
++        async def scalars(self, query):
++            return SimpleNamespace(all=lambda: list(reversed(messages)))
++
++    db = DB()
++
++    @asynccontextmanager
++    async def lock(_):
++        yield db
++
++    monkeypatch.setattr(chat, "conversation_lock", lock)
++    monkeypatch.setattr(chat, "owned_conversation", AsyncMock(return_value=conversation))
++    settings = get_settings()
++    for key, value in dict(
++        rag_enabled=True,
++        g3_d2_enabled=True,
++        g5_intent_context_enabled=True,
++        g5_realtime_mcp_enabled=True,
++        g5_hybrid_enabled=False,
++        g5_intent_context_fallback_enabled=False,
++        g3_private_dataset_path="fixture",
++        rag_corpus_version="fixture-v1",
++    ).items():
++        monkeypatch.setattr(settings, key, value)
++    data = SimpleNamespace(
++        version="fixture-v1", accepted={"alpha"}, procedures={"alpha": {"title": "Alpha"}}
++    )
++    monkeypatch.setattr(chat, "load_active_dataset", lambda *args: data)
++    monkeypatch.setattr(
++        chat,
++        "decide_topic",
++        AsyncMock(return_value=SimpleNamespace(action="KEEP", reason="fixture")),
++    )
++
++    def prepare(data, query, *args, **kwargs):
++        return (
++            query,
++            IntentContextState(
++                corpus_version="fixture-v1",
++                procedure_id="alpha",
++                field_intents=["processing_times"],
++                jurisdiction="Phường Mô Phỏng",
++            ),
++            None,
++        )
++
++    monkeypatch.setattr(chat, "prepare_model_turn", prepare)
++    local_grounding = dict(
++        request_id=str(uuid4()),
++        evidence_bundle_id=str(uuid4()),
++        status="ANSWER",
++        corpus_version="fixture-v1",
++        data_classification="D2_COMPANY_REAL",
++        sources=[],
++        missing_information=[],
++        checklist=[
++            dict(
++                field="processing_times",
++                label="Thời hạn",
++                value="LOCAL",
++                evidence_ids=["fixture-1"],
++            )
++        ],
++    )
++    monkeypatch.setattr(chat, "answer_with_rag", AsyncMock(return_value=("LOCAL", local_grounding)))
++    calls = []
++
++    async def lookup(self, request):
++        assert committed_states[-1]["pending_realtime"] is None
++        calls.append(request)
++        return LookupResult(
++            status="FOUND",
++            procedure_id="alpha",
++            field="processing_times",
++            jurisdiction="Phường Mô Phỏng",
++            checked_at=datetime.now(timezone.utc),
++            value="WEB VALUE",
++            source_title="Alpha",
++            source_url="https://dichvucong.gov.vn/x",
++            retrieval_note="fictional fixture",
++        )
++
++    monkeypatch.setattr(chat.MCPSourceUpdateClient, "lookup_current", lookup)
++    ai = SimpleNamespace(analyze_intent_context=AsyncMock(return_value={}))
++    user_id = uuid4()
++    first = await chat.send_message(
++        conversation.id,
++        user_id,
++        MessageInput(client_message_id=uuid4(), content="Alpha bao lâu?"),
++        uuid4(),
++        ai,
++    )
++    assert OFFER in first.assistant_message.content
++    assert len(calls) == 0
++    assert conversation.rag_context["pending_realtime"]["request"]["field"] == "processing_times"
++    body = MessageInput(client_message_id=uuid4(), content=reply)
++    second = await chat.send_message(conversation.id, user_id, body, uuid4(), ai)
++    assert len(calls) == expected_calls
++    assert ai.analyze_intent_context.await_count == 1
++    assert conversation.rag_context["pending_realtime"] is None
++    assert "LOCAL" in second.assistant_message.content
++    retry = await chat.send_message(conversation.id, user_id, body, uuid4(), ai)
++    assert retry.assistant_message.id == second.assistant_message.id
++    assert len(calls) == expected_calls
++    if calls:
++        assert calls[0].procedure_id == "alpha"
++        assert calls[0].field == "processing_times"
++        assert "WEB VALUE" in second.assistant_message.content
++    assert all(isinstance(m, Message) for m in messages)
+diff --git a/backend/tests/test_g5_source_mcp.py b/backend/tests/test_g5_source_mcp.py
+index c01c200..0756879 100644
+--- a/backend/tests/test_g5_source_mcp.py
++++ b/backend/tests/test_g5_source_mcp.py
+@@ -136,3 +136,97 @@ def test_mcp_source_client_rejects_untrusted_endpoint():
+         MCPSourceUpdateClient(url="https://example.com/mcp")
+     with pytest.raises(ValueError, match="G5_SOURCE_MCP_ENDPOINT_REQUIRED"):
+         MCPSourceUpdateClient(url="http://localhost:8091/not-mcp")
++
++
++@pytest.mark.parametrize(
++    "patch",
++    [
++        {},
++        {"procedure_id": "wrong"},
++        {"field": "fees"},
++        {"jurisdiction": "other"},
++        {"source_url": "https://evil.example"},
++        {"source_title": "other"},
++        {"checked_at": "2000-01-01T00:00:00Z"},
++        {"extra_key": True},
++    ],
++)
++async def test_current_lookup_validates_wire_payload(monkeypatch, patch):
++    from types import SimpleNamespace
++
++    from app.rag.g5 import source_mcp
++    from app.rag.g5.realtime_contract import LookupRequest
++
++    request = LookupRequest(
++        procedure_id="alpha",
++        procedure_name="Alpha",
++        field="processing_times",
++        jurisdiction="Test Ward",
++        as_of=datetime.now(timezone.utc).date(),
++    )
++    payload = (
++        dict(
++            status="FOUND",
++            procedure_id="alpha",
++            field="processing_times",
++            value="3 days",
++            source_title="Alpha",
++            source_url="https://dichvucong.gov.vn/a",
++            jurisdiction="Test Ward",
++            checked_at=datetime.now(timezone.utc).isoformat(),
++            retrieval_note="fixture",
++        )
++        | patch
++    )
++
++    class FakeClient:
++        def __init__(self, *args, **kwargs):
++            pass
++
++        async def __aenter__(self):
++            return self
++
++        async def __aexit__(self, *args):
++            pass
++
++        async def call_tool(self, name, args, **kwargs):
++            assert name == "lookup_current_procedure"
++            assert args == request.model_dump(mode="json")
++            return SimpleNamespace(is_error=False, structured_content={"result": payload})
++
++    monkeypatch.setattr(source_mcp, "Client", FakeClient)
++    client = MCPSourceUpdateClient(url="http://source-service:8091/mcp")
++    result = await client.lookup_current(request)
++    assert (result is not None) == (not patch)
++
++
++async def test_current_client_transport_timeout_falls_back(monkeypatch):
++    import asyncio
++
++    from app.rag.g5 import source_mcp
++    from app.rag.g5.realtime_contract import LookupRequest
++
++    class SlowClient:
++        def __init__(self, *args, **kwargs):
++            pass
++
++        async def __aenter__(self):
++            await asyncio.sleep(1)
++
++        async def __aexit__(self, *args):
++            pass
++
++    monkeypatch.setattr(source_mcp, "Client", SlowClient)
++    client = MCPSourceUpdateClient(url="http://source-service:8091/mcp", timeout_seconds=0.001)
++    assert (
++        await client.lookup_current(
++            LookupRequest(
++                procedure_id="a",
++                procedure_name="A",
++                field="fees",
++                jurisdiction="ward",
++                as_of=datetime.now(timezone.utc).date(),
++            )
++        )
++        is None
++    )
+diff --git a/compose.g5.yaml b/compose.g5.yaml
+index 799ae99..a823605 100644
+--- a/compose.g5.yaml
++++ b/compose.g5.yaml
+@@ -140,6 +140,7 @@ services:
+       context: ./source-service
+       dockerfile: Dockerfile
+     environment:
++      G5_REALTIME_MCP_ENABLED: ${G5_REALTIME_MCP_ENABLED:-false}
+       G5_SOURCE_DATA_DIR: /var/lib/g5-source
+       G5_CORPUS_PATH: /run/g5-corpus
+       G5_REVIEW_TOKEN: ${G5_SOURCE_REVIEW_TOKEN:?Set a local G5 reviewer token}
+@@ -170,6 +171,8 @@ services:
+       G5_EMBEDDING_SERVICE_URL: http://embedding-server:8090/v1
+       G5_EMBEDDING_MODEL: Qwen3-Embedding-0.6B
+       G5_EMBEDDING_TIMEOUT_SECONDS: "8"
++      G5_REALTIME_MCP_ENABLED: ${G5_REALTIME_MCP_ENABLED:-false}
++      G5_REALTIME_MCP_TIMEOUT_SECONDS: "8"
+       G5_SOURCE_MCP_ENABLED: "true"
+       G5_SOURCE_MCP_URL: http://source-service:8091/mcp
+       G5_SOURCE_MCP_TIMEOUT_SECONDS: "8"
+diff --git a/source-service/app/current_procedure.py b/source-service/app/current_procedure.py
+new file mode 100644
+index 0000000..1ba5e2e
+--- /dev/null
++++ b/source-service/app/current_procedure.py
+@@ -0,0 +1,319 @@
++"""Bounded, read-only official HTML lookup; never publishes or changes corpus.
++
++Only GET forms actually advertised by the official page are submitted. No undocumented
++API or guessed search parameter is used. JS-only pages fail closed, pending a verified
++adapter. Exact titles and explicit locality labels are required for FOUND.
++"""
++
++from __future__ import annotations
++
++import asyncio
++import re
++from dataclasses import dataclass, field
++from datetime import datetime, timezone
++from html.parser import HTMLParser
++from urllib.error import HTTPError
++from urllib.parse import urlencode, urljoin, urlsplit, urlunsplit
++from urllib.request import HTTPRedirectHandler, Request, build_opener
++
++from app.realtime_contract import LookupRequest, LookupResult, official_url
++
++ENTRY_URL = "https://dichvucong.gov.vn/p/home/dvc-tthc-category.html"
++MAX_BYTES = 1_048_576
++LABELS = {
++    "processing_times": ("Thời hạn giải quyết", "Thời gian giải quyết"),
++    "receiving_authority": ("Cơ quan thực hiện", "Cơ quan có thẩm quyền", "Cơ quan tiếp nhận"),
++    "submission_methods": ("Cách thức thực hiện", "Hình thức nộp"),
++    "required_documents": ("Thành phần hồ sơ",),
++    "fees": ("Phí", "Lệ phí", "Phí, lệ phí"),
++    "steps": ("Trình tự thực hiện",),
++    "legal_bases": ("Căn cứ pháp lý",),
++    "applicant_scope": ("Đối tượng thực hiện",),
++}
++
++
++def norm(text):
++    return " ".join(text.casefold().split()).strip(" :")
++
++
++@dataclass(eq=False)
++class Node:
++    tag: str
++    attrs: dict = field(default_factory=dict)
++    children: list = field(default_factory=list)
++    parent: Node | None = None
++
++    def text(self):
++        if self.tag in {"script", "style", "noscript", "template", "nav", "footer"}:
++            return ""
++        return " ".join(
++            value.text() if isinstance(value, Node) else value for value in self.children
++        ).strip()
++
++    def nodes(self):
++        if self.tag in {"script", "style", "noscript", "template", "nav", "footer"}:
++            return
++        for child in self.children:
++            if isinstance(child, Node):
++                yield child
++                yield from child.nodes()
++
++
++class Page(HTMLParser):
++    def __init__(self, html):
++        super().__init__(convert_charrefs=True)
++        self.root = Node("root")
++        self.current = self.root
++        self.node_count = 0
++        self.depth = 0
++        self.feed(html)
++
++    def handle_starttag(self, tag, attrs):
++        self.node_count += 1
++        if self.node_count > 12000 or self.depth > 64:
++            raise ValueError("DVC_HTML_COMPLEXITY_LIMIT")
++        node = Node(tag, dict(attrs), parent=self.current)
++        self.current.children.append(node)
++        if tag not in {"input", "br", "hr", "meta", "link", "img", "source", "wbr", "area"}:
++            self.current = node
++            self.depth += 1
++
++    def handle_endtag(self, tag):
++        node = self.current
++        depth = self.depth
++        while node.parent:
++            if node.tag == tag:
++                self.current = node.parent
++                self.depth = depth - 1
++                return
++            node = node.parent
++            depth -= 1
++
++    def handle_data(self, data):
++        self.current.children.append(data)
++
++    def labelled(self, labels):
++        """Read adjacent labelled content, never search a whole-page text blob."""
++        keys = {norm(label) for label in labels}
++        found = []
++        for node in self.root.nodes():
++            if node.tag not in {
++                "dt",
++                "th",
++                "td",
++                "label",
++                "h2",
++                "h3",
++                "h4",
++                "strong",
++                "b",
++                "span",
++                "div",
++                "p",
++            }:
++                continue
++            if norm(node.text()) not in keys or node.parent is None:
++                continue
++            # Prefer the outer label wrapper, avoiding extraction of the same value twice.
++            if norm(node.parent.text()) in keys:
++                continue
++            if node.tag in {"th", "td"} and node.parent.tag == "tr":
++                cells = [
++                    n for n in node.parent.children if isinstance(n, Node) and n.tag in {"th", "td"}
++                ]
++                # A column heading must read the matching column, not the next heading.
++                if len(cells) > 1 and all(n.tag == "th" for n in cells):
++                    table = node.parent
++                    while table.parent and table.tag != "table":
++                        table = table.parent
++                    column = cells.index(node)
++                    for row in table.nodes():
++                        if row.tag != "tr" or row is node.parent:
++                            continue
++                        values = [
++                            n for n in row.children if isinstance(n, Node) and n.tag in {"td", "th"}
++                        ]
++                        if len(values) != len(cells) or any(
++                            n.attrs.get("rowspan", "1") != "1" or n.attrs.get("colspan", "1") != "1"
++                            for n in values
++                        ):
++                            continue
++                        value = values[column].text()
++                        if value:
++                            if column:
++                                value = values[0].text() + ": " + value
++                            if value not in found:
++                                found.append(value)
++                    continue
++            siblings = node.parent.children
++            after = siblings[siblings.index(node) + 1 :]
++            parts = []
++            for sibling in after:
++                if isinstance(sibling, Node):
++                    if sibling.tag in {"dt", "h1", "h2", "h3", "h4", "label"}:
++                        break
++                    parts.append(sibling.text())
++                    if node.tag in {"th", "td"}:
++                        break
++                else:
++                    parts.append(sibling)
++            value = " ".join(" ".join(parts).split()).strip(" :")
++            if value and value not in found:
++                found.append(value)
++        return found
++
++    def links(self, base, name):
++        return list(
++            dict.fromkeys(
++                urljoin(base, n.attrs["href"])
++                for n in self.root.nodes()
++                if n.tag == "a" and n.attrs.get("href") and norm(n.text()) == norm(name)
++            )
++        )
++
++    def search_url(self, base, name):
++        for form in self.root.nodes():
++            if form.tag != "form" or form.attrs.get("method", "get").lower() != "get":
++                continue
++            inputs = [n for n in form.nodes() if n.tag == "input" and n.attrs.get("name")]
++            queries = [
++                n for n in inputs if n.attrs.get("type", "text").lower() in {"text", "search"}
++            ]
++            if len(queries) != 1:
++                continue
++            action = official_url(urljoin(base, form.attrs.get("action") or base))
++            params = {
++                n.attrs["name"]: n.attrs.get("value", "")
++                for n in inputs
++                if n.attrs.get("type") == "hidden"
++            }
++            params[queries[0].attrs["name"]] = name
++            p = urlsplit(action)
++            return urlunsplit((p.scheme, p.netloc, p.path, urlencode(params), ""))
++        return None
++
++
++class NoRedirect(HTTPRedirectHandler):
++    def redirect_request(self, req, fp, code, msg, headers, newurl):
++        return None
++
++
++def fetch_html(url: str, timeout: float = 4) -> tuple[str, str]:
++    """Check every hop BEFORE request; limit redirects, body size, and socket wait."""
++    opener = build_opener(NoRedirect())
++    for _ in range(4):
++        official_url(url)
++        try:
++            response = opener.open(
++                Request(
++                    url,
++                    headers={
++                        "User-Agent": "HCC-CurrentProcedure/1.0",
++                        "Accept": "text/html",
++                    },
++                ),
++                timeout=timeout,
++            )
++        except HTTPError as exc:
++            if exc.code in {301, 302, 303, 307, 308}:
++                location = exc.headers.get("Location")
++                exc.close()
++                if not location:
++                    raise ValueError("DVC_REDIRECT_MISSING_LOCATION") from None
++                url = official_url(urljoin(url, location))
++                continue
++            raise
++        with response:
++            if response.headers.get_content_type() not in {"text/html", "application/xhtml+xml"}:
++                raise ValueError("DVC_UNSUPPORTED_CONTENT")
++            data = response.read(MAX_BYTES + 1)
++            if len(data) > MAX_BYTES:
++                raise ValueError("DVC_RESPONSE_TOO_LARGE")
++            return official_url(response.geturl()), data.decode(
++                response.headers.get_content_charset() or "utf-8", errors="strict"
++            )
++    raise ValueError("DVC_TOO_MANY_REDIRECTS")
++
++
++def extract(page: Page, request: LookupRequest, url: str) -> dict | None:
++    titles = page.labelled(("Tên thủ tục", "Tên thủ tục hành chính"))
++    titles += [n.text() for n in page.root.nodes() if n.tag in {"h1", "h2"}]
++    if not any(norm(t) == norm(request.procedure_name) for t in titles):
++        return None
++    localities = page.labelled(
++        (
++            "Địa phương",
++            "Phạm vi thực hiện",
++            "Cơ quan thực hiện",
++            "Cơ quan có thẩm quyền",
++            "Cơ quan tiếp nhận",
++        )
++    )
++    # Entire locality phrase must occur with boundaries; never accept a missing locality.
++    locality = norm(request.jurisdiction)
++    if not any(
++        re.search(r"(?<!\w)" + re.escape(locality) + r"(?!\w)", norm(v)) for v in localities
++    ):
++        return None
++    values = page.labelled(LABELS[request.field])
++    if not values:
++        return None
++    return dict(value="\n".join(values), source_title=request.procedure_name, source_url=url)
++
++
++async def lookup(request: LookupRequest, *, enabled=False, timeout=6, fetch=fetch_html):
++    def result(status, note, **kwargs):
++        return LookupResult(
++            status=status,
++            procedure_id=request.procedure_id,
++            field=request.field,
++            jurisdiction=request.jurisdiction,
++            checked_at=datetime.now(timezone.utc),
++            retrieval_note=note,
++            **kwargs,
++        )
++
++    if not enabled:
++        return result("ERROR", "DVC_REALTIME_DISABLED")
++    if request.as_of != datetime.now(timezone.utc).date():
++        return result("NOT_FOUND", "DVC_CURRENT_ONLY_NO_HISTORICAL_OR_FUTURE_ASSERTION")
++    try:
++        async with asyncio.timeout(timeout):
++
++            async def read(url):
++                official_url(url)
++                final_url, html = await asyncio.to_thread(fetch, url, min(timeout, 4))
++                official_url(final_url)
++                return final_url, Page(html)
++
++            base, page = await read(ENTRY_URL)
++            urls = page.links(base, request.procedure_name)
++            if not urls:
++                search_url = page.search_url(base, request.procedure_name)
++                if search_url:
++                    base, page = await read(search_url)
++                    urls = page.links(base, request.procedure_name)
++            if not urls:
++                return result("NOT_FOUND", "DVC_NO_EXACT_HTML_RESULT_OR_JS_SEARCH_REQUIRED")
++            if len(urls) > 6:
++                return result("AMBIGUOUS", "DVC_TOO_MANY_EXACT_TITLE_RESULTS")
++            matches = {}
++            for url in urls:
++                final_url, detail = await read(url)
++                match = extract(detail, request, final_url)
++                if match:
++                    matches[final_url] = match
++            if len(matches) > 1:
++                return result("AMBIGUOUS", "DVC_MULTIPLE_PROCEDURE_LOCALITY_MATCHES")
++            if not matches:
++                return result("NOT_FOUND", "DVC_FIELD_OR_LOCALITY_NOT_VERIFIED")
++            return result(
++                "FOUND",
++                "DVC_HTML_EXACT_TITLE_AND_EXPLICIT_LOCALITY; UNREVIEWED_WEB",
++                **next(iter(matches.values())),
++            )
++    except TimeoutError:
++        return result("ERROR", "DVC_TIMEOUT")
++    except Exception:
++        # Never leak remote response bodies or transport secrets into chat.
++        return result("ERROR", "DVC_FETCH_OR_SCHEMA_ERROR")
+diff --git a/source-service/app/realtime_contract.py b/source-service/app/realtime_contract.py
+new file mode 100644
+index 0000000..bca22a3
+--- /dev/null
++++ b/source-service/app/realtime_contract.py
+@@ -0,0 +1,75 @@
++"""Wire contract v1. Keep identical to backend/app/rag/g5/realtime_contract.py."""
++
++from datetime import date
++from typing import Literal
++from urllib.parse import urlsplit
++
++from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
++
++ALLOWED_HOSTS = frozenset(
++    {
++        "dichvucong.gov.vn",
++        "www.dichvucong.gov.vn",
++        "thutuc.dichvucong.gov.vn",
++        "vpcp.dichvucong.gov.vn",
++    }
++)
++LookupField = Literal[
++    "processing_times",
++    "receiving_authority",
++    "submission_methods",
++    "required_documents",
++    "fees",
++    "steps",
++    "legal_bases",
++    "applicant_scope",
++]
++
++
++def official_url(url: str) -> str:
++    p = urlsplit(url)
++    if (
++        p.scheme != "https"
++        or p.hostname not in ALLOWED_HOSTS
++        or p.username is not None
++        or p.password is not None
++        or p.port not in (None, 443)
++        or p.fragment
++        or any(c.isspace() or ord(c) < 32 for c in url)
++        or "\\" in url
++    ):
++        raise ValueError("DVC_URL_NOT_ALLOWED")
++    return url
++
++
++class LookupRequest(BaseModel):
++    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
++    procedure_id: str = Field(min_length=1, max_length=200)
++    procedure_name: str = Field(min_length=1, max_length=500)
++    field: LookupField
++    jurisdiction: str = Field(min_length=1, max_length=200)
++    as_of: date
++
++
++class LookupResult(BaseModel):
++    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
++    status: Literal["FOUND", "NOT_FOUND", "AMBIGUOUS", "ERROR"]
++    procedure_id: str = Field(min_length=1, max_length=200)
++    field: LookupField
++    value: str | None = Field(default=None, max_length=8000)
++    source_title: str | None = Field(default=None, max_length=500)
++    source_url: str | None = Field(default=None, max_length=2000)
++    jurisdiction: str = Field(min_length=1, max_length=200)
++    checked_at: AwareDatetime
++    retrieval_note: str = Field(min_length=1, max_length=1000)
++
++    @model_validator(mode="after")
++    def validate_found(self):
++        if self.source_url:
++            official_url(self.source_url)
++        if self.status == "FOUND":
++            if not all((self.value, self.source_title, self.source_url)):
++                raise ValueError("FOUND_REQUIRES_VALUE_AND_CITATION")
++        elif self.value is not None:
++            raise ValueError("NON_FOUND_MUST_NOT_HAVE_VALUE")
++        return self
+diff --git a/source-service/app/server.py b/source-service/app/server.py
+index 0133967..7073e62 100644
+--- a/source-service/app/server.py
++++ b/source-service/app/server.py
+@@ -13,6 +13,8 @@ from pydantic import BaseModel
+ from starlette.requests import Request
+ from starlette.responses import JSONResponse
+ 
++from app.current_procedure import lookup
++from app.realtime_contract import LookupRequest, LookupResult
+ from app.store import SourceStoreError, SourceVersionStore
+ 
+ mcp = MCPServer(
+@@ -98,6 +100,31 @@ def manage_source_update(
+         return SourceToolResult(status="ERROR", error=str(exc))
+ 
+ 
++@mcp.tool(structured_output=True)
++async def lookup_current_procedure(
++    procedure_id: str,
++    procedure_name: str,
++    field: str,
++    jurisdiction: str,
++    as_of: str,
++) -> LookupResult:
++    """Read current official DVC information after caller obtains user consent.
++
++    This separate tool never stages, reviews, publishes, or mutates source data.
++    """
++    request = LookupRequest(
++        procedure_id=procedure_id,
++        procedure_name=procedure_name,
++        field=field,
++        jurisdiction=jurisdiction,
++        as_of=as_of,
++    )
++    return await lookup(
++        request,
++        enabled=os.environ.get("G5_REALTIME_MCP_ENABLED", "false").lower() == "true",
++    )
++
++
+ @mcp.custom_route("/health", methods=["GET"])
+ async def health(_request: Request):
+     try:
+diff --git a/source-service/tests/test_current_procedure.py b/source-service/tests/test_current_procedure.py
+new file mode 100644
+index 0000000..f2a07a2
+--- /dev/null
++++ b/source-service/tests/test_current_procedure.py
+@@ -0,0 +1,259 @@
++import asyncio
++import io
++import time
++from datetime import datetime, timezone
++from email.message import Message
++from urllib.error import HTTPError
++
++import pytest
++from pydantic import ValidationError
++
++from app import current_procedure as cp
++from app.realtime_contract import LookupRequest, LookupResult, official_url
++
++TITLE = "Đăng ký Alpha"
++URL = "https://thutuc.dichvucong.gov.vn/p/detail?id=1"
++DETAIL = """<h1>Đăng ký Alpha</h1><dl>
++<dt>Địa phương:</dt><dd>Phường Mô Phỏng</dd>
++<dt>Thời hạn giải quyết:</dt><dd>03 ngày làm việc</dd>
++<dt>Cơ quan thực hiện:</dt><dd>UBND Phường Mô Phỏng</dd></dl>"""
++INDEX = f'<a href="{URL}">{TITLE}</a>'
++
++
++def request(**changes):
++    return LookupRequest(
++        **(
++            dict(
++                procedure_id="internal-alpha",
++                procedure_name=TITLE,
++                field="processing_times",
++                jurisdiction="Phường Mô Phỏng",
++                as_of=datetime.now(timezone.utc).date(),
++            )
++            | changes
++        )
++    )
++
++
++def run(pages=None, **kwargs):
++    pages = pages or {cp.ENTRY_URL: INDEX, URL: DETAIL}
++    calls = []
++
++    def fetch(url, timeout):
++        calls.append(url)
++        assert timeout > 0
++        return url, pages[url]
++
++    result = asyncio.run(cp.lookup(request(), enabled=True, fetch=fetch, **kwargs))
++    return result, calls
++
++
++def test_found():
++    result, calls = run()
++    assert result.status == "FOUND"
++    assert result.value == "03 ngày làm việc"
++    assert result.procedure_id == "internal-alpha"
++    assert result.source_url == URL
++    assert len(calls) == 2
++    assert result.checked_at.tzinfo
++
++
++@pytest.mark.parametrize(
++    "url",
++    [
++        "https://evil.example/dvc",
++        "https://dichvucong.gov.vn.evil.example/a",
++        "https://dichvucong.gov.vn@evil.example/a",
++        "http://dichvucong.gov.vn/a",
++        "https://dichvucong.gov.vn:8443/a",
++        "https://user@dichvucong.gov.vn/a",
++        "https://dichvucong.gov.vn/a#fragment",
++        "file:///etc/passwd",
++        "https://127.0.0.1/a",
++        "https://dichvucong.gov.vn/\na",
++        "https://dichvucong.gov.vn\\@evil.example/",
++    ],
++)
++def test_url_allowlist(url):
++    with pytest.raises(ValueError):
++        official_url(url)
++
++
++@pytest.mark.parametrize(
++    "host",
++    [
++        "dichvucong.gov.vn",
++        "www.dichvucong.gov.vn",
++        "thutuc.dichvucong.gov.vn",
++        "vpcp.dichvucong.gov.vn",
++    ],
++)
++def test_allowed_hosts(host):
++    assert official_url(f"https://{host}/x")
++
++
++def test_advertised_get_form():
++    form = '<form action="/search" method="get"><input name="q" type="search"></form>'
++    search = cp.Page(form).search_url(cp.ENTRY_URL, TITLE)
++    result, calls = run({cp.ENTRY_URL: form, search: INDEX, URL: DETAIL})
++    assert result.status == "FOUND"
++    assert calls[1] == search
++
++
++@pytest.mark.parametrize(
++    "change",
++    [
++        DETAIL.replace("Phường Mô Phỏng", "Phường Khác"),
++        DETAIL.replace(TITLE, "Đăng ký Beta"),
++        DETAIL.replace("Thời hạn giải quyết", "Nội dung khác"),
++    ],
++)
++def test_wrong_scope_identity_or_field(change):
++    result, _ = run({cp.ENTRY_URL: INDEX, URL: change})
++    assert result.status == "NOT_FOUND"
++    assert result.value is None
++
++
++def test_ambiguous():
++    other = URL + "2"
++    result, _ = run(
++        {cp.ENTRY_URL: INDEX + f'<a href="{other}">{TITLE}</a>', URL: DETAIL, other: DETAIL}
++    )
++    assert result.status == "AMBIGUOUS"
++
++
++def test_js_only():
++    result, _ = run({cp.ENTRY_URL: "<script>renderSearch()</script>"})
++    assert result.status == "NOT_FOUND"
++    assert "JS_SEARCH_REQUIRED" in result.retrieval_note
++
++
++def test_external_link_not_requested():
++    result, calls = run({cp.ENTRY_URL: f'<a href="https://evil.example/x">{TITLE}</a>'})
++    assert result.status == "ERROR"
++    assert calls == [cp.ENTRY_URL]
++
++
++def test_disabled_and_historical():
++    def never(*args):
++        pytest.fail("must not fetch")
++
++    assert asyncio.run(cp.lookup(request(), fetch=never)).status == "ERROR"
++    assert (
++        asyncio.run(cp.lookup(request(as_of="2000-01-01"), enabled=True, fetch=never)).status
++        == "NOT_FOUND"
++    )
++
++
++def test_timeout():
++    def slow(*args):
++        time.sleep(0.04)
++        return cp.ENTRY_URL, INDEX
++
++    result = asyncio.run(cp.lookup(request(), enabled=True, timeout=0.005, fetch=slow))
++    assert result.status == "ERROR"
++    assert result.retrieval_note == "DVC_TIMEOUT"
++
++
++def test_sanitized_failure():
++    def broken(*args):
++        raise RuntimeError("secret remote response")
++
++    result = asyncio.run(cp.lookup(request(), enabled=True, fetch=broken))
++    assert result.status == "ERROR"
++    assert "secret" not in result.model_dump_json()
++
++
++def test_schema():
++    result, _ = run()
++    for patch in [
++        {"source_url": None},
++        {"source_url": "https://evil.example"},
++        {"unexpected": True},
++        {"checked_at": "2026-01-01T00:00:00"},
++        {"status": "ERROR"},
++    ]:
++        with pytest.raises(ValidationError):
++            LookupResult.model_validate(result.model_dump() | patch)
++
++
++def test_redirect_external_blocked_before_request(monkeypatch):
++    calls = []
++
++    class Opener:
++        def open(self, req, timeout):
++            calls.append(req.full_url)
++            headers = Message()
++            headers["Location"] = "https://evil.example/private"
++            raise HTTPError(req.full_url, 302, "redirect", headers, io.BytesIO())
++
++    monkeypatch.setattr(cp, "build_opener", lambda *args: Opener())
++    with pytest.raises(ValueError, match="DVC_URL_NOT_ALLOWED"):
++        cp.fetch_html(cp.ENTRY_URL)
++    assert calls == [cp.ENTRY_URL]
++
++
++def test_tool_default_off(monkeypatch):
++    from app.server import lookup_current_procedure
++
++    monkeypatch.delenv("G5_REALTIME_MCP_ENABLED", raising=False)
++    result = asyncio.run(lookup_current_procedure(**request().model_dump(mode="json")))
++    assert result.retrieval_note == "DVC_REALTIME_DISABLED"
++
++
++def test_table_column_extraction_preserves_submission_channel():
++    html = """<table><tr><th>Hình thức nộp</th><th>Thời hạn giải quyết</th><th>Lệ phí</th></tr>
++    <tr><td>Trực tiếp</td><td>03 ngày</td><td>0 đồng</td></tr>
++    <tr><td>Trực tuyến</td><td>02 ngày</td><td>0 đồng</td></tr></table>"""
++    assert cp.Page(html).labelled(("Thời hạn giải quyết",)) == [
++        "Trực tiếp: 03 ngày",
++        "Trực tuyến: 02 ngày",
++    ]
++
++
++def test_complex_html_rejected():
++    with pytest.raises(ValueError, match="COMPLEXITY"):
++        cp.Page("<div>" * 100)
++
++
++def test_wire_contract_copies_match():
++    from pathlib import Path
++
++    root = Path(__file__).resolve().parents[2]
++    assert (root / "source-service/app/realtime_contract.py").read_bytes() == (
++        root / "backend/app/rag/g5/realtime_contract.py"
++    ).read_bytes()
++
++
++def test_allowed_redirect_and_body_limit(monkeypatch):
++    calls = []
++
++    class Response(io.BytesIO):
++        def __init__(self, data):
++            super().__init__(data)
++            self.headers = Message()
++            self.headers["Content-Type"] = "text/html; charset=utf-8"
++
++        def geturl(self):
++            return URL
++
++    class Opener:
++        def open(self, req, timeout):
++            calls.append(req.full_url)
++            if len(calls) == 1:
++                headers = Message()
++                headers["Location"] = URL
++                raise HTTPError(req.full_url, 302, "redirect", headers, io.BytesIO())
++            return Response(b"x" * (cp.MAX_BYTES + 1))
++
++    monkeypatch.setattr(cp, "build_opener", lambda *args: Opener())
++    with pytest.raises(ValueError, match="TOO_LARGE"):
++        cp.fetch_html(cp.ENTRY_URL)
++    assert calls == [cp.ENTRY_URL, URL]
++
++
++def test_navigation_locality_is_not_procedure_evidence():
++    html = """<h1>Đăng ký Alpha</h1><nav><dl>
++    <dt>Địa phương</dt><dd>Phường Mô Phỏng</dd></dl></nav>
++    <dl><dt>Thời hạn giải quyết</dt><dd>3 ngày</dd></dl>"""
++    assert cp.extract(cp.Page(html), request(), URL) is None
+diff --git a/source-service/tests/test_mcp.py b/source-service/tests/test_mcp.py
+index ff92b95..df317a0 100644
+--- a/source-service/tests/test_mcp.py
++++ b/source-service/tests/test_mcp.py
+@@ -6,7 +6,7 @@ from mcp import Client
+ from app.server import mcp, store
+ 
+ 
+-def test_mcp_exposes_exactly_two_tools_and_structured_read(monkeypatch, tmp_path):
++def test_mcp_exposes_three_tools_and_structured_read(monkeypatch, tmp_path):
+     corpus = tmp_path / "corpus"
+     procedures = corpus / "normalized/procedures.jsonl"
+     procedures.parent.mkdir(parents=True)
+@@ -30,6 +30,7 @@ def test_mcp_exposes_exactly_two_tools_and_structured_read(monkeypatch, tmp_path
+             tools = await client.list_tools()
+             assert {tool.name for tool in tools.tools} == {
+                 "get_procedure_update",
++                "lookup_current_procedure",
+                 "manage_source_update",
+             }
+             result = await client.call_tool(
+@@ -44,3 +45,32 @@ def test_mcp_exposes_exactly_two_tools_and_structured_read(monkeypatch, tmp_path
+ 
+     asyncio.run(run())
+     store.cache_clear()
++
++
++def test_current_tool_returns_structured_disabled_result(monkeypatch):
++    from datetime import datetime, timezone
++
++    monkeypatch.delenv("G5_REALTIME_MCP_ENABLED", raising=False)
++
++    async def run():
++        async with Client(mcp, raise_exceptions=True) as client:
++            result = await client.call_tool(
++                "lookup_current_procedure",
++                {
++                    "procedure_id": "fictional-alpha",
++                    "procedure_name": "Alpha",
++                    "field": "processing_times",
++                    "jurisdiction": "Fictional Ward",
++                    "as_of": datetime.now(timezone.utc).date().isoformat(),
++                },
++            )
++            assert not result.is_error
++            payload = result.structured_content
++            if set(payload) == {"result"}:
++                payload = payload["result"]
++            assert payload["status"] == "ERROR"
++            assert payload["retrieval_note"] == "DVC_REALTIME_DISABLED"
++            assert payload["value"] is None
++            assert payload["checked_at"]
++
++    asyncio.run(run())

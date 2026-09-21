@@ -140,6 +140,7 @@ services:
       context: ./source-service
       dockerfile: Dockerfile
     environment:
+      G5_REALTIME_MCP_ENABLED: ${G5_REALTIME_MCP_ENABLED:-false}
       G5_SOURCE_DATA_DIR: /var/lib/g5-source
       G5_CORPUS_PATH: /run/g5-corpus
       G5_REVIEW_TOKEN: ${G5_SOURCE_REVIEW_TOKEN:?Set a local G5 reviewer token}
@@ -170,6 +171,8 @@ services:
       G5_EMBEDDING_SERVICE_URL: http://embedding-server:8090/v1
       G5_EMBEDDING_MODEL: Qwen3-Embedding-0.6B
       G5_EMBEDDING_TIMEOUT_SECONDS: "8"
+      G5_REALTIME_MCP_ENABLED: ${G5_REALTIME_MCP_ENABLED:-false}
+      G5_REALTIME_MCP_TIMEOUT_SECONDS: "8"
       G5_SOURCE_MCP_ENABLED: "true"
       G5_SOURCE_MCP_URL: http://source-service:8091/mcp
       G5_SOURCE_MCP_TIMEOUT_SECONDS: "8"
