@@ -25,15 +25,6 @@ source.csv/xlsx    file nguồn để đối chiếu lại
 
 Package tự động không được đánh dấu đã được con người duyệt. Loader kiểm tra tính toàn vẹn/liên kết nguồn, không chứng minh model hiểu đúng mọi câu hỏi.
 
-## Cập nhật 22/10/2026
-
-- Câu đếm dòng, tên cột/giá trị được ghi rõ và số dòng vật lý có thể thực thi trực tiếp qua compiler có tham số. Cách hỏi có điều kiện chưa hiểu được vẫn qua planner.
-- Tách phạm vi từng intent khi lập kế hoạch và repair; dấu phân cách trong giá trị được trích dẫn không tạo thêm intent. Hỏi cùng trường của hai bản ghi giữ hai điều kiện độc lập.
-- Đối chiếu số dòng, biến thể tên, các nhãn văn bản ngắn khớp chính xác nguồn; giữ nhiều dòng trùng tên. Trường không có trong nguồn không được thay bằng trường khác như email thay điện thoại.
-- Chuỗi có dấu nháy/backslash/escape được đối chiếu với giá trị nguồn; ô thiếu và giới hạn danh sách được báo rõ bằng `partial`.
-- Nạp bảng theo lô JSON có tham số, giữ kiểu dữ liệu, thứ tự dòng và bằng chứng. Đầu ra model bị cắt đi qua repair có giới hạn.
-
-Lượt kiểm tra API trên 11 dataset đạt đủ tiêu chí 218/221, DEV 176/176; ba ca `partial` còn lại và phạm vi đánh giá được ghi tại [report](../report/README.md). PDF về hệ thống tự tạo package nằm [tại đây](../report/RP2_he-thong-tu-dong-tao-package.pdf).
 
 ## Chạy bằng Docker
 
