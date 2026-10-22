@@ -1,32 +1,16 @@
-import type {
-  Conversation,
-  CreateMessageInput,
-  CreateMessageResponse,
-  FeedbackInput,
-  Message,
-  MessageFeedback,
-  User,
-} from '../types/api'
+import type { AnswerResponse, GroundedAnswer } from '../types/api'
 
 type ErrorResponse = {
-  error?: {
-    code?: string
-    message?: string
-    request_id?: string
-  }
+  detail?: string | { msg?: string }[]
 }
 
 export class ApiError extends Error {
   readonly status: number
-  readonly code?: string
-  readonly requestId?: string
 
-  constructor(message: string, status: number, code?: string, requestId?: string) {
+  constructor(message: string, status: number) {
     super(message)
     this.name = 'ApiError'
     this.status = status
-    this.code = code
-    this.requestId = requestId
   }
 }
 
@@ -48,72 +32,52 @@ export function resolveApiBaseUrl(configuredValue: string, pageUrl: string) {
 function getApiBaseUrl() {
   const apiBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim().replace(/\/$/, '')
   if (!apiBaseUrl) {
-    throw new Error('Thiếu VITE_API_BASE_URL. Hãy cấu hình URL của Core Backend.')
+    throw new Error('Thiếu VITE_API_BASE_URL. Hãy cấu hình URL của Backend.')
   }
   return resolveApiBaseUrl(apiBaseUrl, window.location.href)
 }
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const headers = new Headers(options.headers)
-  if (options.body !== undefined && !headers.has('Content-Type')) {
-    headers.set('Content-Type', 'application/json')
-  }
-
+export async function answerQuestion(
+  query: string,
+  sessionId: string,
+): Promise<AnswerResponse> {
   let response: Response
   try {
-    response = await fetch(`${getApiBaseUrl()}${path}`, {
-      ...options,
+    response = await fetch(`${getApiBaseUrl()}/answer`, {
+      method: 'POST',
       credentials: 'include',
-      headers,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query_text_raw: query,
+        session_id: sessionId,
+      }),
     })
   } catch (requestError) {
-    if (requestError instanceof DOMException && requestError.name === 'AbortError') throw requestError
-    throw new Error(
-      'Không kết nối được Core Backend. Hãy kiểm tra backend và cấu hình CORS.',
-      { cause: requestError },
-    )
+    if (requestError instanceof DOMException && requestError.name === 'AbortError') {
+      throw requestError
+    }
+    throw new Error('Không kết nối được Backend. Hãy kiểm tra backend và CORS.', {
+      cause: requestError,
+    })
   }
 
   if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as ErrorResponse | null
-    throw new ApiError(
-      body?.error?.message ?? 'Core Backend trả về lỗi.',
-      response.status,
-      body?.error?.code,
-      body?.error?.request_id,
-    )
+    let message = `Backend trả về lỗi HTTP ${response.status}.`
+    try {
+      const body = (await response.json()) as ErrorResponse
+      if (typeof body.detail === 'string') message = body.detail
+      else if (Array.isArray(body.detail)) {
+        message = body.detail.map(({ msg }) => msg).filter(Boolean).join('; ') || message
+      }
+    } catch {
+      // Keep the explicit HTTP status when the backend does not return JSON.
+    }
+    throw new ApiError(message, response.status)
   }
 
-  if (response.status === 204) return undefined as T
-  return response.json() as Promise<T>
+  const answer = (await response.json()) as GroundedAnswer
+  return {
+    answer,
+    sessionId: response.headers.get('X-Conversation-Session-Id'),
+  }
 }
-
-const conversationPath = (conversationId: string) =>
-  `/conversations/${encodeURIComponent(conversationId)}`
-
-export const getCurrentUser = () => request<User>('/auth/me')
-export const login = (displayName: string) =>
-  request<User>('/auth/login', {
-    method: 'POST',
-    body: JSON.stringify({ display_name: displayName }),
-  })
-export const logout = () => request<void>('/auth/logout', { method: 'POST' })
-export const getConversations = () => request<Conversation[]>('/conversations')
-export const createConversation = () =>
-  request<Conversation>('/conversations', { method: 'POST', body: JSON.stringify({}) })
-export const getMessages = (conversationId: string, signal?: AbortSignal) =>
-  request<Message[]>(`${conversationPath(conversationId)}/messages`, { signal })
-export const createMessage = (conversationId: string, input: CreateMessageInput) =>
-  request<CreateMessageResponse>(`${conversationPath(conversationId)}/messages`, {
-    method: 'POST',
-    body: JSON.stringify(input),
-  })
-export const getConversationFeedback = (conversationId: string, signal?: AbortSignal) =>
-  request<MessageFeedback[]>(`${conversationPath(conversationId)}/feedback`, { signal })
-export const putMessageFeedback = (messageId: string, input: FeedbackInput) =>
-  request<MessageFeedback>(`/messages/${encodeURIComponent(messageId)}/feedback`, {
-    method: 'PUT',
-    body: JSON.stringify(input),
-  })
-export const deleteMessageFeedback = (messageId: string) =>
-  request<void>(`/messages/${encodeURIComponent(messageId)}/feedback`, { method: 'DELETE' })

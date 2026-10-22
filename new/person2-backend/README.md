@@ -1,4 +1,6 @@
-# Backend + lexical retrieval + mock AI
+# Person 2 — Backend & Grounding (BanuTheBanana)
+
+**Owner:** BanuTheBanana. This track also owns the local web-to-backend integration.
 
 Backend FastAPI/SQLAlchemy async từ scaffold new/, tái dùng interpretation, templates và citation verifier từ bản backend hcc cũ. SQLite/WSGI/mocked retrieval của bản cũ không được đưa vào. Retriever chạy BM25 thật trên fragment; generator giả lập chỉ trích nguyên văn evidence, không gọi LLM/API.
 
@@ -73,6 +75,7 @@ ALLOW_DRAFT=true chỉ cho chạy integration với corpus chưa duyệt. Khi t�
 - Bộ lọc jurisdiction so exact không phân biệt hoa/thường. Nguồn có effective_date tương lai bị loại. Bộ lọc ngày loại nguồn không rõ ngày; superseded_by được xét theo ngày thay thế. scope chưa có metadata nên fail closed trả low_confidence.
 - Follow-up chỉ hỗ trợ tiền tố rõ như 'còn', 'vậy', 'thế', 'thủ tục đó', 'cái đó'. Câu mới không có tiền tố không kế thừa state; tên/alias hiện tại ưu tiên hơn thủ tục cũ. Không phải bộ hiểu intent hoàn chỉnh.
 - Grounding xét section_type thật thay vì đoán từ nội dung. Citation verifier được tái dùng từ code cũ; mock chỉ sao chép evidence nên không bịa nội dung.
+- Có thể chọn `GENERATOR_BACKEND=llama_cpp` để dùng adapter OpenAI-compatible của Person 3: cài `pip install -e ../person3-generation-evaluation`, đặt `LLM_BASE_URL`, `LLM_MODEL` và tùy chọn `LLM_API_KEY`, rồi chạy model server riêng. Chỉ sinh câu trả lời khi evidence resolved/đủ; lỗi model không tự fallback sang mock và citations vẫn bị kiểm tra theo bundle hiện tại.
 - Audit chỉ lưu IDs, fingerprint, top-2/margin/status và metadata; không lưu câu hỏi/văn bản nguồn. Mỗi request retrieve/answer thành công đều ghi audit; input lỗi validation không phải truy vấn retrieval.
 - API giới hạn query 4000 ký tự, top_k 1..20. Ghi state và audit cùng transaction; PostgreSQL advisory lock serialize cùng session.
 

@@ -59,6 +59,7 @@ def test_generator_returns_person2_compatible_shape():
     generator = GroundedGenerator(runtime, max_repair_attempts=0)
     assert generator.generate(bundle()) == valid_output()
     assert len(runtime.calls) == 1
+    assert "/no_think" in runtime.calls[0][1]["content"]
 
 
 def test_rejects_citation_outside_current_bundle():

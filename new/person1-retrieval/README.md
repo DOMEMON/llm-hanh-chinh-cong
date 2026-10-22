@@ -1,6 +1,8 @@
 > Corpus đã thay: dùng **../data/corpus**, xem **../USE_REAL_CORPUS.md**. Các lệnh benchmark demo bên dưới chỉ để regression.
 
-# Person 1 — Corpus & Retrieval
+# Person 1 — Corpus & Retrieval (MinhKek)
+
+**Owner:** MinhKek.
 
 Bản hoàn thiện kỹ thuật ngày 30/09/2026. Đọc `REPORT_PERSON1.md` ở gốc trước.
 Giữ nguyên shape của `contracts/retrieval_input.schema.json` và `evidence_bundle.schema.json`.

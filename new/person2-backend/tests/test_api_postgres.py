@@ -6,7 +6,7 @@ from app.main import create_app
 
 @pytest.mark.skipif(not os.getenv('TEST_DATABASE_URL'),reason='Needs isolated PostgreSQL TEST_DATABASE_URL')
 def test_api_real_postgres():
-    cfg=Settings(database_url=os.environ['TEST_DATABASE_URL'],bootstrap_demo=True,allow_draft=True,api_token='test-token')
+    cfg=Settings(database_url=os.environ['TEST_DATABASE_URL'],bootstrap_demo=True,allow_draft=True,api_token='test-token',generator_backend='mock')
     headers={'Authorization':'Bearer test-token'}
     with TestClient(create_app(cfg)) as c:
         assert c.get('/health').json()['database']=='postgresql'

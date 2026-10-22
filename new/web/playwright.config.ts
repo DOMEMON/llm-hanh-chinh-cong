@@ -1,5 +1,7 @@
 import { defineConfig, devices } from '@playwright/test'
 
+const browserChannel = process.env.PLAYWRIGHT_CHANNEL
+
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: false,
@@ -9,10 +11,11 @@ export default defineConfig({
     // Must match WEB_ORIGIN exactly so the browser exercises the intended CORS policy.
     baseURL: process.env.E2E_BASE_URL ?? 'http://localhost:3000',
     trace: 'retain-on-failure',
+    launchOptions: browserChannel ? { channel: browserChannel } : undefined,
   },
   projects: [
     {
-      name: 'chromium',
+      name: browserChannel ?? 'chromium',
       use: { ...devices['Desktop Chrome'] },
     },
   ],

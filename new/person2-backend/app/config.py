@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
 
@@ -16,6 +17,11 @@ class Settings(BaseSettings):
     bootstrap_demo: bool = True
     bm25_score_floor: float = 0.5  # UNCALIBRATED demo values
     bm25_margin: float = 0.15
+    generator_backend: Literal['mock','llama_cpp'] = 'mock'
+    llm_base_url: str = 'http://127.0.0.1:8080'
+    llm_model: str = 'Qwen3-1.7B-Q8_0'
+    llm_api_key: str = ''
+    llm_timeout_seconds: float = 120.0
     api_token: str = ''  # optional for loopback; set before remote exposure
 
     @property

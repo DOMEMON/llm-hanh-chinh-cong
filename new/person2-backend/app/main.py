@@ -5,6 +5,7 @@ from pathlib import Path
 from uuid import uuid4
 from fastapi import FastAPI,HTTPException,Header,Depends,Response
 from fastapi.concurrency import run_in_threadpool
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel,Field,ConfigDict
 from sqlalchemy import text
 from app.config import Settings,get_settings
@@ -13,7 +14,7 @@ from app.models import Base
 from app.corpus import read_corpus
 from app.repository import import_corpus,load_active,get_state,save_state,log_event
 from app.contracts import validate
-from app.service import ground_and_answer
+from app.service import create_generator,ground_and_answer
 from app.legacy.conversation_state import build_conversation_state,resolve_filters
 from person1_retrieval import VietnameseSegmenter,SegmenterConfig
 from person1_retrieval.retriever import LexicalRetriever
@@ -37,6 +38,7 @@ def create_app(settings=None):
     async def lifespan(app):
         engine,sessions=make_database(settings)
         app.state.engine=engine;app.state.sessions=sessions;app.state.retriever=None;app.state.lock=asyncio.Lock()
+        app.state.generator=create_generator(settings)
         try:
             async with engine.begin() as db:await db.run_sync(Base.metadata.create_all)
             async with sessions.begin() as db:
@@ -49,6 +51,10 @@ def create_app(settings=None):
             yield
         finally:await engine.dispose()
     app=FastAPI(title='Hành chính — Backend + lexical RAG + mock AI',lifespan=lifespan)
+    app.add_middleware(CORSMiddleware,allow_origins=[
+        'http://localhost:3000','http://127.0.0.1:3000','http://[::1]:3000'
+    ],allow_credentials=True,allow_methods=['GET','POST'],allow_headers=['Authorization','Content-Type'],
+        expose_headers=['X-Conversation-Session-Id'])
     async def auth(authorization:str|None=Header(default=None)):
         if settings.api_token and not hmac.compare_digest(authorization or '', 'Bearer '+settings.api_token):
             raise HTTPException(401,'Bearer token required')
@@ -57,7 +63,7 @@ def create_app(settings=None):
         try:
             async with app.state.sessions() as db:
                 await db.execute(text('SELECT 1'));active=await load_active(db)
-            return {'status':'ok','database':'postgresql','generator':'mock_extractive','allow_draft':settings.allow_draft,
+            return {'status':'ok','database':'postgresql','generator':settings.generator_backend,'model':settings.llm_model if settings.generator_backend=='llama_cpp' else None,'allow_draft':settings.allow_draft,
                 'active_snapshot':active[0] if active else None,'thresholds':'uncalibrated_demo'}
         except Exception:raise HTTPException(503,'Database unavailable') from None
     async def execute(request,respond):
@@ -85,14 +91,14 @@ def create_app(settings=None):
             except ValueError:raise HTTPException(422,'Invalid retrieval filters/input') from None
             bundle=await run_in_threadpool(retriever.retrieve,ri,state)
             validate('evidence_bundle',bundle)
-            result=ground_and_answer(bundle,raw) if respond else bundle
+            result=await run_in_threadpool(ground_and_answer,bundle,raw,app.state.generator) if respond else bundle
             # Clear prior on new topic or ambiguity instead of leaking old identity.
             new=build_conversation_state(sid,filters,bundle,raw,datetime.now(timezone.utc).isoformat())
             validate('conversation_state',new);await save_state(db,new)
             await log_event(db,sid,{'snapshot':fp,'bundle_id':bundle['bundle_id'],'top_score':bundle['top_score'],
                 'second_score':bundle['second_score'],'margin':bundle['margin'],'confidence_status':bundle['confidence_status'],
                 'procedure_id':bundle['resolved_procedure_id'],'fragment_ids':[e['fragment_id'] for e in bundle['evidence']],
-                'generator':'mock_extractive','thresholds':'uncalibrated_demo','segmenter':retriever.segmenter.metadata()['config_fingerprint']})
+                'generator':settings.generator_backend,'thresholds':'uncalibrated_demo','segmenter':retriever.segmenter.metadata()['config_fingerprint']})
         return result,sid
     @app.post('/api/v1/retrieve',dependencies=[Depends(auth)])
     async def retrieve(request:Query,response:Response):

@@ -1,8 +1,12 @@
 from datetime import datetime,timezone
+from typing import Protocol
 from app.contracts import validate
 from app.legacy.grounding import check_sufficiency,verify_citations
 from app.legacy.interpretation import requested_section_types
 from app.legacy.templates import INSUFFICIENT_EVIDENCE_PROMPT,NO_MATCH_PROMPT,clarification_prompt
+
+class Generator(Protocol):
+    def generate(self,bundle: dict) -> dict: ...
 
 class MockGenerator:
     """Deterministic extractive mock: no invented fee/date; no model/API needed."""
@@ -14,7 +18,23 @@ class MockGenerator:
                 'source_locator':e['source_locator'],'claim_text':e['text']})
         return {'answer_text':'[MOCK AI — trích nguyên văn dữ liệu thử nghiệm]\n'+'\n\n'.join(lines),'citations':citations}
 
-def ground_and_answer(bundle,query):
+def create_generator(settings):
+    if settings.generator_backend=='mock':
+        return MockGenerator()
+    from person3_generation_evaluation import GroundedGenerator,LlamaCppHTTPRuntime
+    runtime=LlamaCppHTTPRuntime(
+        base_url=settings.llm_base_url,
+        model=settings.llm_model,
+        api_key=settings.llm_api_key or None,
+        timeout_seconds=settings.llm_timeout_seconds,
+        temperature=0.0,
+        seed=42,
+        max_tokens=768,
+        json_mode=True,
+    )
+    return GroundedGenerator(runtime)
+
+def ground_and_answer(bundle,query,generator=None):
     validate('evidence_bundle',bundle)
     status=bundle['confidence_status'];answer='';citations=[];prompt=None
     if status=='ambiguous':
@@ -32,9 +52,10 @@ def ground_and_answer(bundle,query):
         if not sufficiency.ok:
             result_status='insufficient_data';prompt=INSUFFICIENT_EVIDENCE_PROMPT
         else:
-            generated=MockGenerator().generate(bundle)
+            selected_generator=generator if generator is not None else MockGenerator()
+            generated=selected_generator.generate(bundle)
             check=verify_citations(bundle,generated['answer_text'],generated['citations'])
-            if not check.ok:raise ValueError('Mock generation citation mismatch')
+            if not check.ok:raise ValueError('Generated answer citation mismatch')
             result_status='answered';answer=generated['answer_text'];citations=generated['citations']
     result={'status':result_status,'answer_text':answer,'citations':citations,'clarification_prompt':prompt,
         'evidence_bundle_id':bundle['bundle_id'],'created_at':datetime.now(timezone.utc).isoformat()}

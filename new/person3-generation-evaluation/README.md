@@ -1,4 +1,4 @@
-# Person 3 — Generation & Evaluation
+# Person 3 — Generation & Evaluation (Domemon)
 
 Giao diện benchmark độc lập dành cho Person 2 API nằm tại
 [`benchmark-frontend/`](benchmark-frontend/README.md). Thư mục này chỉ chứa
@@ -16,11 +16,10 @@ prompt/output contract, local OpenAI-compatible runtime adapter, structural cita
 benchmark/regression utilities, retrieval metric split, threshold tuning, latency telemetry,
 failure taxonomy, and the standalone benchmark frontend.
 
-Integration is intentionally left to the team: Person 2 still owns wiring the real generator
-into the FastAPI runtime, and the deployment machine still owns PostgreSQL/Docker/model
-startup. A real-model benchmark, semantic-groundedness adjudication, production threshold
-selection, and final E2E acceptance remain runtime/evaluation results rather than code that
-can be truthfully pre-filled.
+Person 2 (BanuTheBanana) has wired this generator into the FastAPI runtime and tested the
+integrated local Qwen3 1.7B flow. A broad real-model benchmark, semantic-groundedness
+adjudication, production threshold selection, and final legal-content validation remain
+open evaluation work; a passing integration test does not establish those results.
 
 See `INTEGRATION_HANDOFF.md` for the exact boundary.
 

@@ -54,7 +54,7 @@ def build_messages(bundle: dict) -> list[dict[str, str]]:
         {"role": "system", "content": SYSTEM_PROMPT},
         {
             "role": "user",
-            "content": "Hãy tạo câu trả lời từ EvidenceBundle sau.\n" + json.dumps(
+            "content": "Hãy tạo câu trả lời từ EvidenceBundle sau. /no_think\n" + json.dumps(
                 payload, ensure_ascii=False, separators=(",", ":")
             ),
         },
