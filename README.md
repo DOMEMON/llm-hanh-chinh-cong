@@ -7,17 +7,6 @@ Hai hướng triển khai cùng nguyên tắc: **LLM hiểu yêu cầu, chương
 | **LLM tư vấn pháp lý — Hệ thống tư vấn pháp lý: Hỗ trợ tra cứu thủ tục hành chính** | Tra cứu 36 thủ tục thuộc phường Tăng Nhơn Phú, Thành phố Hồ Chí Minh; multi-intent và hội thoại nhiều lượt | [LLM tư vấn pháp lý](final/He-thong-LLM-tu-van-phap-ly/README.md) |
 | **LLM Reusable — Tự động tạo package từ dữ liệu dạng bảng cho hệ thống LLM** | Upload CSV/Excel → phân tích metadata → tạo package → hỏi đáp trên dataset được chọn | [LLM Reusable](final/He-thong-LLM-reusable/README.md) |
 
-## Báo cáo và bản cập nhật 22/10/2026
-
-Hai báo cáo IEEE nằm trong [thư mục report](final/report/README.md):
-
-- [RP1 — Hệ thống tư vấn pháp lý: Hỗ trợ tra cứu thủ tục hành chính](final/report/RP1_he-thong-tu-van-phap-ly.pdf).
-- [RP2 — Hệ thống tự động tạo package từ dữ liệu dạng bảng cho hệ thống LLM](final/report/RP2_he-thong-tu-dong-tao-package.pdf).
-
-Bản source bàn giao bổ sung kiểm tra yêu cầu/đối tượng cho LLM tư vấn pháp lý và sửa ràng buộc câu hỏi bảng cho LLM Reusable: đếm dòng, tra dòng chính xác, tách multi-intent, cùng trường cho nhiều bản ghi, tên hiển thị khác mã định danh và giá trị văn bản có dấu nháy/escape. Nạp bảng dùng các lô có tham số để giảm chi phí chèn từng giá trị, vẫn giữ kiểu và bằng chứng nguồn.
-
-Số liệu kiểm thử offline được ghi nhận từ bản source trước khi bàn giao (chưa chạy lại trong repo này): **LLM tư vấn pháp lý 223/223**, **LLM Reusable 180/180**. Lượt hồi quy API LLM Reusable trên 11 dataset hoàn tất **221/221**, đạt đủ tiêu chí **218/221**, trong đó DEV **176/176**. Ba trường hợp còn lại là kết quả `partial` do ô thiếu hoặc giới hạn trả 1.000 dòng; các câu hỏi/gold và scorer được giữ nguyên. Chi tiết phạm vi nằm trong [README báo cáo](final/report/README.md). Các PDF giữ số liệu của phiên bản được đo khi viết bài.
-
 ## LLM tư vấn pháp lý: tra cứu thủ tục hành chính
 
 ![Kiến trúc LLM tư vấn pháp lý — Hệ thống tư vấn dịch vụ Hành chính công](final/assets/he-thong-llm-tu-van-phap-ly.png)
