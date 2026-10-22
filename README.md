@@ -139,8 +139,4 @@ Linux/macOS dùng `.venv/bin/python`. Test offline dùng dữ liệu tổng hợ
 Thư mục `final/report/` chứa hai PDF được công bố cùng source. Không kèm bộ benchmark riêng, dataset thử tải từ bên thứ ba, tài khoản, `.env` thật, tunnel state, logs hay weights. Quyền sử dụng model, thư viện và dữ liệu bên thứ ba vẫn theo giấy phép tương ứng.
 
 
-## Lưu trữ lịch sử phát triển
 
-Mã nguồn tại `old/` và `new/` được giữ nguyên để đối chiếu lịch sử, **không phải bản bàn giao đang được giới thiệu ở trang này**. Tài liệu lưu trữ: [giai đoạn cũ](old/ARCHIVE.md), [Design B](new/ARCHIVE.md) và [README gốc trước khi chuẩn hóa](new/ARCHIVE-ROOT-README.md).
-
-Việc đổi tên thư mục/tài liệu không thay đổi các API, namespace `g85`, biến môi trường `G85_*` hay đường dẫn import nội bộ. Cần chạy lại Docker và các bộ kiểm thử trước khi đưa hệ thống vào vận hành.
