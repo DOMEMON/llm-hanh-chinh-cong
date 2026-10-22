@@ -7,8 +7,8 @@
 
 Tác giả: Bùi Xuân Hoan, Phạm Lê Minh, Phan Văn Tú — FPT University.
 Hai PDF được sao chép nguyên bản từ bản thảo đã biên dịch; các liên kết Fig./Table
-trong PDF được giữ nguyên. Hình kiến trúc có tại [G8](../assets/g8-system-architecture.png)
-và [G8.5](../assets/g85-auto-package-pipeline.png).
+trong PDF được giữ nguyên. Hình kiến trúc có tại [LLM tư vấn pháp lý](../assets/he-thong-llm-tu-van-phap-ly.png)
+và [LLM Reusable](../assets/he-thong-llm-reusable.png).
 
 ## Đối chiếu với source cập nhật ngày 22/10/2026
 
@@ -18,14 +18,14 @@ Source mới bổ sung các sửa lỗi sau giai đoạn viết bài. Kết qu�
 
 | Kiểm tra bản xuất bản | Kết quả |
 | --- | ---: |
-| G8: kiểm thử backend offline | 223/223 |
-| G8.5: kiểm thử package/runtime/API offline | 180/180 |
-| G8.5: yêu cầu API hoàn tất trên 11 dataset | 221/221 |
-| G8.5: khớp đủ kết quả, trạng thái và tiêu chí bằng chứng | 218/221 |
-| G8.5: DEV, gồm multi-intent và hội thoại nhiều lượt | 176/176 |
-| G8.5: tra cứu cơ bản lấy mẫu | 11/11 |
-| G8.5: gợi ý câu hỏi UI | 28/31 |
-| G8.5: câu tái hiện / đổi cách diễn đạt lỗi người dùng | 3/3 |
+| LLM tư vấn pháp lý: kiểm thử backend offline | 223/223 |
+| LLM Reusable: kiểm thử package/runtime/API offline | 180/180 |
+| LLM Reusable: yêu cầu API hoàn tất trên 11 dataset | 221/221 |
+| LLM Reusable: khớp đủ kết quả, trạng thái và tiêu chí bằng chứng | 218/221 |
+| LLM Reusable: DEV, gồm multi-intent và hội thoại nhiều lượt | 176/176 |
+| LLM Reusable: tra cứu cơ bản lấy mẫu | 11/11 |
+| LLM Reusable: gợi ý câu hỏi UI | 28/31 |
+| LLM Reusable: câu tái hiện / đổi cách diễn đạt lỗi người dùng | 3/3 |
 
 Kiểm tra API dùng 11 dataset: hành chính, Auto MPG, Penguins, Bike Daily, Wine
 Quality, Synthetic Office, Transfer Assets, Transfer Courses, Travel, Equipment,
@@ -46,5 +46,5 @@ phân tích lỗi, không phải tập holdout độc lập hoặc benchmark t�
 Test offline dùng model giả lập; số lượng test offline khác số câu đánh giá
 LLM thật. Dữ liệu, credential và log hội thoại kiểm thử không kèm trong repo.
 
-Hướng dẫn chạy source: [G8](../G8-Source-code-LLM-tu-van-hanh-chinh-cong/README.md),
-[G8.5](../G8.5-He-thong-LLM-reusable/README.md).
+Hướng dẫn chạy source: [LLM tư vấn pháp lý](../He-thong-LLM-tu-van-phap-ly/README.md),
+[LLM Reusable](../He-thong-LLM-reusable/README.md).

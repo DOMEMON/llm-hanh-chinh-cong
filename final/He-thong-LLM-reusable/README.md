@@ -1,8 +1,8 @@
-# G8.5 — Tự động tạo package từ dữ liệu dạng bảng cho hệ thống LLM
+# Hệ thống LLM Reusable — Tự động tạo package từ dữ liệu dạng bảng
 
-Bản hiện tại thay deployment document-RAG cũ bằng **workspace upload CSV/XLSX → tự tạo package → hỏi đáp**. API, web tĩnh, loader và runtime nằm trong thư mục này; không cần snapshot G8 hay package/dataset của tác giả.
+Bản hiện tại thay deployment document-RAG cũ bằng **workspace upload CSV/XLSX → tự tạo package → hỏi đáp**. API, web tĩnh, loader và runtime nằm trong thư mục này; không cần snapshot LLM tư vấn pháp lý hay package/dataset của tác giả.
 
-![Pipeline tạo và sử dụng package G8.5](../assets/g85-auto-package-pipeline.png)
+![Pipeline tạo và sử dụng package LLM Reusable](../assets/he-thong-llm-reusable.png)
 
 ## Nguyên lý
 
@@ -37,10 +37,10 @@ Lượt kiểm tra API trên 11 dataset đạt đủ tiêu chí 218/221, DEV 176
 
 ## Chạy bằng Docker
 
-Chuẩn bị model `/v1/chat/completions` hỗ trợ JSON-schema output. Tham chiếu: Qwen3-8B Q4_K_M qua llama.cpp; xem [README gốc](../README.md#chạy-trên-máy-riêng). Không kèm weights hay tự khởi động model của tác giả.
+Chuẩn bị model `/v1/chat/completions` hỗ trợ JSON-schema output. Tham chiếu: Qwen3-8B Q4_K_M qua llama.cpp; xem [README gốc](../../README.md#chạy-trên-máy-riêng). Không kèm weights hay tự khởi động model của tác giả.
 
 ```powershell
-# Trong thư mục G8.5-He-thong-LLM-reusable
+# Trong thư mục He-thong-LLM-reusable
 Copy-Item .env.example .env
 # G85_MODEL_URL: endpoint /v1, container phải gọi được.
 # G85_MODEL_NAME: alias đúng trên model server.
@@ -50,7 +50,7 @@ docker compose up -d --build --wait
 
 Mở **http://localhost:13085**. UI, API, `/docs`, `/health` cùng origin. Một process Uvicorn, một worker xử lý, tối đa tám yêu cầu đang xử lý/chờ cộng lại. Không tăng `--workers` khi chưa có queue/khóa dùng chung.
 
-File/package/context lưu trong volume `datasets`. `docker compose down` giữ volume, **`down -v` xóa dữ liệu**. Không import volume PostgreSQL của G8.5 cũ vào workspace này. Bản source cũ vẫn có trong lịch sử Git.
+File/package/context lưu trong volume `datasets`. `docker compose down` giữ volume, **`down -v` xóa dữ liệu**. Không import volume PostgreSQL của LLM Reusable cũ vào workspace này. Bản source cũ vẫn có trong lịch sử Git.
 
 ## Dùng giao diện
 
@@ -74,7 +74,7 @@ Danh sách bảng, token và lịch sử UI nằm trong `sessionStorage` của t
 
 ## Python, API và CLI
 
-Python 3.12, từ thư mục G8.5:
+Python 3.12, từ thư mục LLM Reusable:
 
 ```powershell
 python -m venv .venv

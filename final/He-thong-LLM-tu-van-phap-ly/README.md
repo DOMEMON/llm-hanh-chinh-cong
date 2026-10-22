@@ -1,16 +1,16 @@
-# G8 — Hệ thống tư vấn pháp lý: Hỗ trợ tra cứu thủ tục hành chính
+# Hệ thống LLM tư vấn pháp lý — Hỗ trợ tra cứu thủ tục hành chính
 
 Ứng dụng hỏi đáp nhiều ý/nhiều lượt theo corpus hành chính đã review. Backend giữ phiên/history/queue/ownership; LLM local lập plan; LangGraph kiểm tra và sửa có giới hạn; câu trả lời lấy evidence đúng thủ tục/trường. React UI có chat, history, sources, feedback và checklist.
 
-![Kiến trúc hệ thống G8](../assets/g8-system-architecture.png)
+![Kiến trúc hệ thống LLM tư vấn pháp lý](../assets/he-thong-llm-tu-van-phap-ly.png)
 
 Bản cập nhật giữ lõi tra cứu/corpus 36 thủ tục và đồng bộ giao diện đang dùng: bố cục chat/lịch sử mới, tìm kiếm hội thoại, sáng/tối và nguồn tham chiếu. Cấu hình chạy độc lập bên dưới được giữ riêng, không sao chép URL, database hay lịch sử của máy tác giả.
 
 ## Source và dữ liệu
 
-- `backend/app/rag/g7/`: planner, task/state, catalog, workflow được G8 kế thừa.
+- `backend/app/rag/g7/`: planner, task/state, catalog, workflow được LLM tư vấn pháp lý kế thừa.
 - `backend/app/rag/g8/`: graph/guard, turn checks và catalog filtering.
-- `app/rag/g3/`, `g4/`, `g5/`: validator/retrieval/grounding/boundary G8 đang import, không phải các server riêng.
+- `app/rag/g3/`, `g4/`, `g5/`: validator/retrieval/grounding/boundary LLM tư vấn pháp lý đang import, không phải các server riêng.
 - `app/{accounts,auth,browser_sessions,chat,jobs,workspace}.py`: session và durable FIFO/history.
 - `app/{checklists,forms}.py`: checklist và tải form đã review/hash.
 - `source-service/`: MCP đọc nguồn hiện tại, opt-in.
@@ -32,7 +32,7 @@ Planner tạo `CatalogPredicate` có kiểu; `mentor_catalog.py` lọc trên fie
 Chuẩn bị model server `/v1/chat/completions` có JSON schema output, ví dụ Qwen3-8B Q4_K_M qua llama.cpp. Không kèm weights; xem README repo.
 
 ```powershell
-# Chạy trong thư mục G8
+# Chạy trong thư mục He-thong-LLM-tu-van-phap-ly
 Copy-Item .env.example .env
 # Sửa password riêng, MODEL_URL và MODEL_NAME trong .env.
 docker compose --env-file .env config --quiet
@@ -96,4 +96,4 @@ Lượt cuối phải là khai sinh + khai tử, không kéo lại kết hôn. �
 
 Không `down -v` nếu cần history; không public `.env`/DB. Ports chỉ bind local; public cần HTTPS, cookie Secure, Origin/rate limit và che route nội bộ. Đây là hỗ trợ tham khảo theo nguồn, không bảo đảm hiệu lực pháp lý hiện tại.
 
-G8 chuyên hành chính, có metadata/guard riêng. Để chuyển lĩnh vực bằng package/profile, dùng [G8.5 reusable](../G8.5-He-thong-LLM-reusable/README.md), không chỉ đổi tên corpus G8.
+LLM tư vấn pháp lý chuyên hành chính, có metadata/guard riêng. Để chuyển lĩnh vực bằng package/profile, dùng [LLM Reusable reusable](../He-thong-LLM-reusable/README.md), không chỉ đổi tên corpus LLM tư vấn pháp lý.
