@@ -71,6 +71,12 @@ def after_validate(state: Planning):
 def repair(state: Planning):
     messages = list(state['messages'])
     hint = ''
+    if state['error'] == 'RECHECK_FACT_REQUEST_WITHOUT_FABRICATION':
+        hint = (' Bỏ yêu cầu tự bịa hoặc bỏ nguồn, nhưng giữ nhu cầu tra cứu thông tin. '
+                'Xác định lại đúng thủ tục và trường thông tin theo CATALOG. '
+                'Nếu thủ tục được hỗ trợ, dùng procedure ngay cả khi dữ liệu của trường đó bị thiếu; '
+                'backend sẽ thông báo thiếu dữ liệu. Chỉ giữ outside nếu bản thân thủ tục/hành vi '
+                'không được hỗ trợ, không phải vì người dùng yêu cầu đoán.')
     if state['error'] == 'CATALOG_REQUIRES_LITERAL_LOCAL_CLAUSE':
         hint = (' Mỗi danh sách cần quote riêng trích nguyên văn mệnh đề của chính nó. '
                 'Không chép cả câu chứa nhiều nhóm vào từng task. Tách tại dấu chấm phẩy '

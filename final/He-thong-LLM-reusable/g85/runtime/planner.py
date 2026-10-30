@@ -233,6 +233,11 @@ async def understand(query, state, package, history, client, request_id):
         literal = literal_preflight(query, state, package)
         if literal is not None:
             return literal
+        # Aggregates require the complete table and the complete current turn.
+        # Sending isolated clauses to the executor loses same-turn group references.
+        from ..tabular_lab.scope import operations
+        if operations(query):
+            return Plan(relation='replace', tasks=[Task(kind='answer', mode='table', quote=query)])
         tabular_spans = request_spans(query)
     if package.select_catalog:
         from copy import copy

@@ -511,11 +511,20 @@ async def understand(query, state, catalog, history, client, request_id):
             from app.rag.g8.guards import semantic_check
             from app.rag.g8.turn_checks import check_turn
 
+            source_request_rechecked = False
             def validated(raw):
+                nonlocal source_request_rechecked
                 draft = bind_matches(raw, resolution, query) if resolution else Plan.model_validate_json(raw)
                 from app.rag.g8.turn_checks import discard_stale_local_scope
                 draft = discard_stale_local_scope(draft, query, state)
                 plan = validate_plan(_bind_explicit_service_place(draft, query), query, catalog, state)
+                # One bounded semantic recheck, never forced routing or an answer
+                # table. Rejecting a demand to invent facts must not accidentally
+                # discard an otherwise identifiable source-backed request.
+                if (not source_request_rechecked and all(t.kind in {'outside','clarify'} for t in plan.tasks)
+                        and re.search(r'bỏ qua nguồn|cứ đoán|tự bịa', query, re.I)):
+                    source_request_rechecked = True
+                    raise ValueError('RECHECK_FACT_REQUEST_WITHOUT_FABRICATION')
                 log.info('g8_graph_draft request_id=%s tasks=%s', request_id,
                          json.dumps([{'kind': t.kind, 'code': t.code, 'fields': t.fields,
                                       'has_scope': bool(t.scope.places or t.scope.country or t.scope.ward)} for t in plan.tasks]))

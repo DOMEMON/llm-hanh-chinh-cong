@@ -4,12 +4,15 @@ const $ = id => document.getElementById(id);
 const storageKey = 'g85-tabular-workspace-v1';
 const activeKey = storageKey + '-active';
 const themeKey = 'g85-tabular-theme';
+const rememberKey = storageKey + '-remember';
+let remember = true;
 const iconsUrl = '/workspace/assets/icons.svg#';
 const labels = {answer:'Đã trả lời',partial:'Trả lời một phần',clarify:'Cần làm rõ',insufficient_data:'Chưa đủ dữ liệu'};
 let datasets = [], active = null, busy = false, pending = null, selectedFile = null, uploading = false;
 let theme = 'system';
 try {
-  const stored = JSON.parse(sessionStorage.getItem(storageKey) || '[]');
+  remember = localStorage.getItem(rememberKey) !== 'false';
+  const stored = JSON.parse((remember && localStorage.getItem(storageKey)) || sessionStorage.getItem(storageKey) || '[]');
   datasets = Array.isArray(stored) ? stored.filter(d => d && typeof d.dataset_id === 'string' && d.dataset_token && d.version) : [];
 } catch { datasets = []; }
 try { theme = localStorage.getItem(themeKey) || 'system'; } catch { /* Preferences are optional. */ }
@@ -53,8 +56,22 @@ function persist() {
   try {
     sessionStorage.setItem(storageKey,JSON.stringify(datasets));
     if(active) sessionStorage.setItem(activeKey,active.dataset_id);
+    if(remember){
+      localStorage.setItem(storageKey,JSON.stringify(datasets));
+      if(active)localStorage.setItem(activeKey,active.dataset_id);
+    }
   } catch { notice('Bộ nhớ trình duyệt đã đầy. Dữ liệu mới chỉ được giữ khi trang đang mở; bạn nên tải hội thoại cần lưu.',true); }
 }
+$('remember-workspace').checked=remember;
+$('remember-workspace').onchange=()=>{
+  remember=$('remember-workspace').checked;
+  try{
+    localStorage.setItem(rememberKey,String(remember));
+    if(!remember){localStorage.removeItem(storageKey);localStorage.removeItem(activeKey);}
+    persist();
+    notice(remember?'Đã ghi nhớ trên trình duyệt này. Không đồng bộ sang máy khác.':'Đã bỏ bản lưu lâu dài trên trình duyệt. Phiên đang mở vẫn dùng được.');
+  }catch{notice('Trình duyệt không cho phép thay đổi bộ nhớ.',true);}
+};
 function lock(value) {
   busy=value; document.body.setAttribute('aria-busy',String(value));
   ['add-data','view-profile','new-chat','conversation-menu-button'].forEach(id=>$(id).disabled=value || (id!=='add-data' && !active));
@@ -143,24 +160,31 @@ function errorText(status,detail) {
     EMPTY_TABLE:'File chưa có dòng dữ liệu bên dưới tên cột.',
     RAGGED_OR_OVERSIZED_ROW:'Có dòng thiếu/thừa cột hoặc ô quá dài. Hãy kiểm tra lại file.',
     MODEL_OUTPUT_TRUNCATED:'Lượt phân tích chưa hoàn tất. Hãy thử lại hoặc dùng bảng nhỏ hơn.',
+    CSV_REQUIRES_UTF8:'File CSV chưa ở mã hóa UTF-8. Trong Excel, chọn Lưu thành → CSV UTF-8 rồi tải lại; hoặc dùng file .xlsx.',
   };
   if(typeof detail==='string' && known[detail])return known[detail];
   return ({409:'Dữ liệu hoặc hội thoại đã thay đổi. Trạng thái sẽ được tải lại; hãy gửi lại câu hỏi.',429:'Hệ thống đang đủ lượt xử lý. Bạn có thể thử lại sau.',503:'Bộ xử lý chưa sẵn sàng. Vui lòng kiểm tra dịch vụ model rồi thử lại.',404:'Không tìm thấy dữ liệu hoặc khóa truy cập không còn hợp lệ.',413:'File vượt quá 20 MB.'})[status] || ('Không đọc được yêu cầu. '+(typeof detail==='string'?detail:'Hãy kiểm tra file và các trường đã nhập.'));
 }
 async function api(path,options={},dataset=null) {
   const headers={...options.headers};if(dataset)headers['X-Dataset-Token']=dataset.dataset_token;
-  let response;try{response=await fetch(path,{...options,headers});}catch{throw new Error('Không kết nối được máy chủ. Hãy kiểm tra kết nối rồi thử lại.');}
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),300000);
+  try{
+  let response;try{response=await fetch(path,{...options,headers,signal:controller.signal});}catch(error){throw new Error(error.name==='AbortError'?'Đã ngừng chờ sau 5 phút; máy chủ có thể vẫn đang xử lý. Với câu hỏi, bấm Thử lại để nhận kết quả của cùng lượt, không tạo lượt mới.':'Không kết nối được máy chủ. Hãy kiểm tra kết nối rồi thử lại.');}
   let body;try{body=await response.json();}catch{throw new Error('Máy chủ chưa trả được kết quả. Vui lòng thử lại.');}
   if(!response.ok){const error=new Error(errorText(response.status,body.detail));error.status=response.status;throw error;}
   return body;
+  }finally{clearTimeout(timer);}
 }
-const displayValue=value=>value===null?'Chưa có dữ liệu':typeof value==='object'?JSON.stringify(value):String(value??'');
+const numberFormat=new Intl.NumberFormat('vi-VN',{maximumFractionDigits:4});
+const rawValue=value=>value===null?'Chưa có dữ liệu':typeof value==='object'?JSON.stringify(value):String(value??'');
+const displayValue=value=>typeof value==='number'?numberFormat.format(value):rawValue(value);
 const columnsOf=rows=>[...new Set(rows.flatMap(row=>Object.keys(row)))];
 function table(rows,caption='Bảng kết quả') {
   const wrap=node('div',undefined,'table-wrap');if(!rows?.length)return wrap;
   const columns=columnsOf(rows),scroll=node('div',undefined,'table-scroll'),t=node('table'),head=node('tr');
   t.setAttribute('aria-label',caption);scroll.tabIndex=0;scroll.setAttribute('aria-label','Cuộn bảng kết quả');
-  columns.forEach(c=>{const th=node('th',c);th.scope='col';head.append(th);});
+  columns.forEach(c=>{const th=node('th',c==='result'?'Kết quả':c);th.scope='col';head.append(th);});
   const thead=node('thead');thead.append(head);t.append(thead);
   const body=node('tbody');t.append(body);scroll.append(t);wrap.append(scroll);
   let shown=0;const footer=node('div',undefined,'table-footer'),count=node('span');
@@ -168,7 +192,7 @@ function table(rows,caption='Bảng kết quả') {
   function append(){
     const end=Math.min(shown+50,rows.length);
     rows.slice(shown,end).forEach(row=>{
-      const tr=node('tr');columns.forEach(c=>tr.append(node('td',displayValue(row[c]),row[c]===null?'empty-value':typeof row[c]==='number'?'numeric':undefined)));body.append(tr);
+      const tr=node('tr');columns.forEach(c=>{const td=node('td',displayValue(row[c]),row[c]===null?'empty-value':typeof row[c]==='number'?'numeric':undefined);if(typeof row[c]==='number')td.title=String(row[c]);tr.append(td);});body.append(tr);
     });shown=end;count.textContent='Hiển thị '+shown+' / '+rows.length+' dòng kết quả';more.hidden=shown>=rows.length;
   }
   append();footer.append(count,more);if(rows.length>8)wrap.append(footer);return wrap;
@@ -203,7 +227,7 @@ function resultText(result) {
   const parts=[result.request_text||'Kết quả',labels[result.status]||result.status||''];
   if(result.reason)parts.push(result.reason);
   const groups=result.semantic_groups||[{data:result.data||[]}];
-  groups.forEach(group=>{if(group.label)parts.push(group.label);(group.data||[]).forEach((row,i)=>parts.push((group.data.length>1?'Bản ghi '+(i+1)+'\n':'')+Object.entries(row).map(([k,v])=>k+': '+displayValue(v)).join('\n')));});
+  groups.forEach(group=>{if(group.label)parts.push(group.label);(group.data||[]).forEach((row,i)=>parts.push((group.data.length>1?'Bản ghi '+(i+1)+'\n':'')+Object.entries(row).map(([k,v])=>k+': '+rawValue(v)).join('\n')));});
   return parts.join('\n\n');
 }
 function safeName(name) {return String(name||'ket-qua').replace(/[<>:"/\\|?*\u0000-\u001f]/g,'-').slice(0,90);}
@@ -214,7 +238,7 @@ function download(content,name,type) {
 function downloadCsv(result) {
   const rows=result.data||[];if(!rows.length)return;
   function cell(value){
-    let text=value===null?'':displayValue(value);
+    let text=value===null?'':rawValue(value);
     if(typeof value==='string'&&/^[=+\-@\t\r]/.test(text))text="'"+text;
     return '"'+text.replaceAll('"','""')+'"';
   }
@@ -254,10 +278,12 @@ function suggestions() {
 function welcomeView() {
   const box=node('div',undefined,'welcome');box.id='welcome';
   if(!active){
-    const symbol=node('div',undefined,'welcome-symbol');symbol.append(icon('chat'));box.append(symbol,node('h2','Hiểu dữ liệu bằng một câu hỏi.'),node('p','Tải bảng của bạn lên. Tra cứu, lọc danh sách hoặc tính toán, kèm nguồn để đối chiếu.'));
+    const symbol=node('div',undefined,'welcome-symbol');symbol.append(icon('table'));box.append(symbol,node('h2','Hiểu dữ liệu bằng một câu hỏi.'),node('p','Tải bảng của bạn lên. Tra cứu, lọc danh sách hoặc tính toán, kèm nguồn để đối chiếu.'));
     const drop=node('div',undefined,'welcome-upload');drop.setAttribute('role','button');drop.tabIndex=0;
     const text=node('div');text.append(node('h3','Bắt đầu với CSV hoặc Excel'),node('p','Kéo thả một file vào đây, hoặc bấm để chọn.'));
-    drop.append(text,icon('upload'));drop.onclick=openUpload;drop.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();openUpload();}};
+    const formats=node('div',undefined,'import-formats');formats.append(node('span','CSV'),node('span','Excel'));
+    const action=node('span','Chọn bảng dữ liệu','import-action');action.append(icon('upload'));
+    drop.append(formats,text,action);drop.onclick=openUpload;drop.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();openUpload();}};
     drop.ondragover=e=>e.preventDefault();drop.ondrop=e=>{e.preventDefault();openUpload();if(e.dataTransfer.files.length===1){pickFile(e.dataTransfer.files[0]);if(selectedFile){const t=new DataTransfer();t.items.add(selectedFile);$('file').files=t.files;}}else uploadError('Chọn một file mỗi lần tải lên.');};
     box.append(drop,node('p','Hỗ trợ tối đa 20 MB, 32 cột và 100.000 ô mỗi bảng.','welcome-note'));
   } else {
@@ -283,7 +309,7 @@ function renderMessages() {
     if(pending.error){
       const error=node('div',undefined,'pending-error');error.setAttribute('role','alert');error.append(node('p',pending.error),button('Thử lại','refresh',()=>submitQuestion(pending.question),'text-button'));article.append(error);
     }else{
-      const loading=node('div',undefined,'pending-answer');loading.setAttribute('role','status');loading.append(node('strong','Đang đối chiếu với dữ liệu…'),node('div',undefined,'skeleton'),node('div',undefined,'skeleton short'));article.append(loading);
+      const loading=node('div',undefined,'pending-answer');loading.setAttribute('role','status');loading.append(node('strong','Đang chờ hoặc xử lý yêu cầu…'),node('p','Hệ thống xử lý lần lượt. Bạn có thể giữ trang mở; gửi lại sau lỗi kết nối sẽ lấy kết quả cùng lượt.','hint'),node('div',undefined,'skeleton'),node('div',undefined,'skeleton short'));article.append(loading);
     }box.append(article);
   }
 }
@@ -330,6 +356,7 @@ function renderProfile() {
   const technical=node('details',undefined,'technical-detail');technical.append(node('summary','Phiên bản và thông tin kỹ thuật'),node('pre',JSON.stringify({dataset_id:active.dataset_id,source_sha256:active.version,package_version:pkg?.version,format:p.format,missing_values:p.missing_values},null,2)));content.append(technical);
 }
 function render() {
+  document.body.dataset.hasDataset=String(Boolean(active));
   $('title').textContent=active?.name||'Hỏi từ dữ liệu của bạn';const p=active?.profile?.physical;
   $('subtitle').textContent=p?p.row_count+' dòng dữ liệu · '+p.columns.length+' cột':'Một nơi để tra cứu và đối chiếu nguồn.';
   renderDatasets();renderProfile();renderMessages();lock(busy);
@@ -354,7 +381,7 @@ async function selectDataset(d) {
 }
 async function newConversation(d) {
   const state=await api(route(d)+'/conversations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version:d.version})},d);
-  d.conversation=state;d.messages=[];d.draft='';pending=null;
+  d.conversation=state;d.messages=[];d.draft='';delete d.inflight;pending=null;
 }
 $('upload-form').onsubmit=async event=>{
   event.preventDefault();if(busy)return;const file=selectedFile||$('file').files[0];if(!file)return;
@@ -409,10 +436,12 @@ async function submitQuestion(question) {
   $('pending-message')?.scrollIntoView({block:'start',behavior:'instant'});
   try{
     if(!d.conversation)await newConversation(d);
-    const response=await api(route(d)+'/query',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question,version:d.version,conversation_id:d.conversation.conversation_id,revision:d.conversation.revision})},d);
+    if(!d.inflight || d.inflight.question!==question)d.inflight={question,request_id:crypto.randomUUID()};
+    d.draft=question;persist();
+    const response=await api(route(d)+'/query',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question,version:d.version,conversation_id:d.conversation.conversation_id,revision:d.conversation.revision,request_id:d.inflight.request_id})},d);
     d.conversation=response.conversation;
     d.messages=[...(d.messages||[]),{question,results:response.results,seconds:response.seconds}].slice(-20);
-    pending=null;d.draft='';$('question').value='';persist();renderMessages();updateComposer();
+    pending=null;delete d.inflight;d.draft='';$('question').value='';persist();renderMessages();updateComposer();
     $('messages').lastElementChild?.scrollIntoView({block:'start',behavior:'instant'});
   }catch(error){
     pending={datasetId:d.dataset_id,question,error:error.message};renderMessages();
@@ -422,6 +451,6 @@ async function submitQuestion(question) {
 $('question-form').onsubmit=event=>{event.preventDefault();submitQuestion($('question').value);};
 render();
 if(datasets.length){
-  let saved;try{saved=sessionStorage.getItem(activeKey);}catch{}
+  let saved;try{saved=(remember&&localStorage.getItem(activeKey))||sessionStorage.getItem(activeKey);}catch{}
   selectDataset(datasets.find(d=>d.dataset_id===saved)||datasets[datasets.length-1]);
 }

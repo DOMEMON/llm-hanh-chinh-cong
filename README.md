@@ -35,6 +35,8 @@ Không cần sửa mapping theo tên từng dataset trong luồng upload tự đ
 
 UI có kéo thả file, tìm/chuyển bảng, xem cấu trúc, hội thoại mới, mở bằng chứng, sao chép, tải CSV, tải package ZIP và sáng/tối. Mỗi dataset có token/version riêng; context giữ hai bản ghi gần nhất. **Chọn một dataset cho mỗi câu hỏi**, chưa hỗ trợ join hay truy vấn chéo các dataset.
 
+Bản cập nhật 30/10/2026 giữ điều kiện lọc khi nhiều intent cùng hỏi một nhóm dữ liệu, phân biệt thống kê với tra cứu một bản ghi, và tách cột cần hiển thị khỏi điều kiện chọn dòng. Upload thất bại được dọn dữ liệu tạm; CSV sai mã hóa có hướng dẫn lưu UTF-8. UI có tùy chọn ghi nhớ trên trình duyệt và gửi lại cùng lượt khi mất phản hồi mạng.
+
 ## Cấu trúc source
 
 ```text
@@ -88,6 +90,8 @@ docker compose up -d --build --wait
 
 LLM Reusable mở trang là có thể upload, **không cần tạo package trước khi chạy**. Model phải sẵn sàng trước khi upload/hỏi. `/health` chỉ báo API/hàng đợi, không chứng nhận model sẵn sàng. Các địa chỉ trên không phải link public luôn hoạt động.
 
+LLM Reusable bổ sung `/ready` để kiểm tra kết nối và model đã nạp; endpoint này trả 503 khi model chưa sẵn sàng hoặc hàng đợi đã đầy. Đây là kiểm tra vận hành, không đánh giá chất lượng câu trả lời.
+
 LLM tư vấn pháp lý giữ dữ liệu trong volume PostgreSQL; LLM Reusable dùng volume `datasets`. Không dùng `docker compose down -v` nếu cần giữ dữ liệu. Không tái sử dụng volume của deployment cũ khi chưa sao lưu/kiểm tra tương thích.
 
 ## Kiểm thử
@@ -117,12 +121,28 @@ python -m venv .venv
 
 Linux/macOS dùng `.venv/bin/python`. Test offline dùng dữ liệu tổng hợp và model giả lập; không cần GPU và **không phải accuracy benchmark LLM**. README từng hệ thống có hướng dẫn UI. Từ gốc repo chạy `python final/tools/check_public_tree.py` để rà file đưa lên Git.
 
+### Kiểm chứng bản cập nhật 30/10/2026
+
+| Phép kiểm tra | Kết quả |
+| --- | ---: |
+| Reusable offline, gồm kiểm thử sửa lỗi | 201/201 |
+| Backend tư vấn pháp lý offline | 223/223 |
+| Reusable API trên 11 dataset, giữ nguyên bộ hồi quy | 218/221 |
+| Bốn câu lỗi ban đầu sau sửa | 4/4 |
+| Đổi nhóm, toàn bảng và tham chiếu nhóm mơ hồ | 4/4 |
+| Tư vấn pháp lý API, giữ nguyên bộ 143 lượt | 142/143 |
+| Browser thật: khôi phục tab, retry, mobile, CSV | 6/6; không có lỗi JavaScript |
+
+Ba ca Reusable còn lại trả `partial` do thiếu ô nguồn hoặc giới hạn 1.000 dòng. Pháp lý còn một ca từ chối quá mức khi người dùng yêu cầu đoán phí của thủ tục có trường phí thiếu dữ liệu. Các câu lỗi dùng để phát triển được đánh giá lại như kiểm thử hồi quy; các tỷ lệ này không đại diện cho mọi cách diễn đạt hay mọi dataset. Đợt kiểm tra dùng chung model local, không phải phép đo tốc độ trong môi trường cô lập.
+
+[Kết quả kiểm chứng dạng JSON](final/verification/20261030/summary.json). Dữ liệu upload, token, cấu hình riêng và log hội thoại được giữ ở máy kiểm thử.
+
 ## Phạm vi và bảo mật
 
 - **LLM tư vấn pháp lý** phục vụ nguồn của phường Tăng Nhơn Phú, không tự áp dụng cho địa phương khác hoặc bảo đảm thủ tục còn hiệu lực. 36 thủ tục runtime khác với 42 dòng release nguồn.
 - **LLM Reusable** nhận một bảng có header mỗi upload, CSV UTF-8 hoặc XLSX; tối đa 20 MiB, 32 cột và 100.000 ô cho package. Chưa có PDF/DOCX, join, workbook bố cục tự do, quy đổi đơn vị hoặc giải mã codebook. Bộ lọc ngữ nghĩa tự do trên văn bản chưa bật trong API.
 - Chuỗi `NA` được giữ nguyên trừ khi người dùng khai báo nó là ký hiệu thiếu; ô thiếu không tự là 0. Hash kiểm tra tính toàn vẹn, không chứng minh dữ liệu/metadata đúng về ngữ nghĩa.
-- **LLM tư vấn pháp lý** dùng cookie trình duyệt để khôi phục lịch sử ở server; tài khoản Google giống nhau trên hai máy không tự đồng bộ cookie. **LLM Reusable** giữ danh sách bảng/token/lịch sử hiển thị trong `sessionStorage` của tab; file và context lưu riêng ở server. Chưa có đồng bộ tài khoản giữa thiết bị.
+- **LLM tư vấn pháp lý** dùng cookie trình duyệt để khôi phục lịch sử ở server; tài khoản Google giống nhau trên hai máy không tự đồng bộ cookie. **LLM Reusable** có tùy chọn lưu danh sách bảng/token và 20 lượt hiển thị gần nhất trong cùng trình duyệt; bỏ chọn để giữ phiên tab. File và context lưu riêng ở server. Chưa có đồng bộ tài khoản giữa thiết bị hoặc khôi phục token sau khi xóa bộ nhớ trình duyệt.
 - Compose mẫu chỉ bind localhost. LLM Reusable chưa có tenant/account auth đầy đủ, thu hồi token, quota đĩa hay chức năng xóa dữ liệu cho production. Public cần HTTPS, xác thực, rate limit, quản trị dữ liệu và sao lưu, không chỉ đổi host sang `0.0.0.0`.
 
 Thư mục `final/report/` chứa hai PDF được công bố cùng source. Không kèm bộ benchmark riêng, dataset thử tải từ bên thứ ba, tài khoản, `.env` thật, tunnel state, logs hay weights. Quyền sử dụng model, thư viện và dữ liệu bên thứ ba vẫn theo giấy phép tương ứng.

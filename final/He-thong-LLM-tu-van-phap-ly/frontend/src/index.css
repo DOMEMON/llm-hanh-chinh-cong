@@ -9,18 +9,18 @@
   font-family: 'Be Vietnam Pro', system-ui, sans-serif;
   color: var(--text); background: var(--page); font-synthesis: none;
   text-rendering: optimizeLegibility; -webkit-font-smoothing: antialiased;
-  --page: #fafbf9; --sidebar: #f0f2ee; --surface: #ffffff;
-  --text: #232a24; --muted: #637066; --subtle: #637066;
-  --line: #dfe4dc; --hover: #e6ebe2; --accent: #416044; --accent-hover: #2f4c32;
-  --accent-soft: #e8efe3; --on-accent: #ffffff; --user-bubble: #edf1e9;
-  --danger: #a33630; --danger-soft: #fff0ed; --shadow: 0 5px 28px rgb(38 56 37 / 5%);
+  --page: #f7f9f6; --sidebar: #eef3ed; --surface: #ffffff;
+  --text: #20332a; --muted: #52665a; --subtle: #607267;
+  --line: #dce5dc; --hover: #e4ece2; --accent: #315b43; --accent-hover: #244a34;
+  --accent-soft: #e5eee3; --on-accent: #ffffff; --user-bubble: #e7eee4;
+  --danger: #a33630; --danger-soft: #fff0ed; --shadow: 0 6px 24px rgb(34 62 43 / 5%);
   color-scheme: light;
 }
 :root[data-theme='dark'] {
-  --page: #1b1f1c; --sidebar: #151a16; --surface: #242a25;
-  --text: #e7ede6; --muted: #acb7ad; --subtle: #9ca99e;
-  --line: #384139; --hover: #303a31; --accent: #a6c59b; --accent-hover: #bfd8b6;
-  --accent-soft: #2b3a2c; --on-accent: #182317; --user-bubble: #303b2f;
+  --page: #18221c; --sidebar: #141d17; --surface: #212e25;
+  --text: #e6eee5; --muted: #b0c0b2; --subtle: #a3b5a6;
+  --line: #35483a; --hover: #2c3d30; --accent: #afd2ae; --accent-hover: #c2dfbd;
+  --accent-soft: #2b4030; --on-accent: #192b1e; --user-bubble: #2b3d2d;
   --danger: #ffaaa3; --danger-soft: #382625; --shadow: 0 5px 28px rgb(0 0 0 / 12%);
   color-scheme: dark;
 }

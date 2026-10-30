@@ -2,23 +2,23 @@
 <html lang="vi">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><meta name="theme-color" content="#fafcfb">
-<title>G8.5 · Hỏi đáp dữ liệu</title>
+<title>LLM Reusable · Hỏi đáp dữ liệu</title>
 <link rel="icon" type="image/svg+xml" href="/workspace/assets/favicon.svg">
-<link rel="stylesheet" href="/workspace/assets/fonts.css"><link rel="stylesheet" href="/workspace/app.css?v=20261016"><script src="/workspace/app.js?v=20261016" defer></script>
+<link rel="stylesheet" href="/workspace/assets/fonts.css"><link rel="stylesheet" href="/workspace/app.css?v=20261016"><link rel="stylesheet" href="/workspace/frontend-design.css?v=20261030"><script src="/workspace/app.js?v=20261030" defer></script>
 </head>
 <body>
-<a class="skip-link" href="#question">Đến ô đặt câu hỏi</a>
+<a class="skip-link" href="#main">Đến nội dung chính</a>
 <div class="workspace">
 <aside id="sidebar" aria-label="Bộ dữ liệu">
-  <div class="sidebar-top"><a class="brand" href="/" aria-label="G8.5 Hỏi đáp dữ liệu"><span class="brand-mark" data-icon="table"></span><span><strong>G8.5</strong><span>Hỏi đáp dữ liệu</span></span></a><button id="close-sidebar" class="icon-button mobile-only" type="button" aria-label="Đóng danh sách dữ liệu" data-icon="close"></button></div>
+  <div class="sidebar-top"><a class="brand" href="/" aria-label="LLM Reusable Hỏi đáp dữ liệu"><span class="brand-mark" data-icon="table"></span><span><strong>LLM Reusable</strong><span>Hỏi đáp dữ liệu</span></span></a><button id="close-sidebar" class="icon-button mobile-only" type="button" aria-label="Đóng danh sách dữ liệu" data-icon="close"></button></div>
   <button class="primary add-data" id="add-data" type="button"><span data-icon="plus"></span>Thêm bảng dữ liệu</button>
   <div class="sidebar-heading"><h2>Dữ liệu của bạn</h2><span id="dataset-count">0</span></div>
   <div class="search-field"><span data-icon="search"></span><label class="sr-only" for="dataset-search">Tìm bảng dữ liệu</label><input id="dataset-search" type="search" placeholder="Tìm bảng dữ liệu…" autocomplete="off"><kbd aria-hidden="true">Ctrl K</kbd></div>
   <nav id="datasets" aria-label="Chọn bộ dữ liệu"></nav>
-  <div class="sidebar-bottom"><p class="storage-note"><span data-icon="shield"></span><span>Danh sách bảng và lịch sử lưu trong phiên tab trình duyệt này. File đã tải vẫn được lưu ở máy chủ.</span></p><div class="sidebar-tools"><button id="help" class="text-button" type="button"><span data-icon="help"></span>Hướng dẫn</button><button id="theme-toggle" class="icon-button" type="button" aria-label="Đổi giao diện" title="Đổi giao diện"></button></div></div>
+  <div class="sidebar-bottom"><label class="storage-note"><input id="remember-workspace" type="checkbox" checked> Ghi nhớ dữ liệu trên máy này</label><p class="storage-note">Lưu danh sách, lịch sử và khóa truy cập trong trình duyệt này. Bỏ chọn khi dùng máy chung. Không đồng bộ sang máy khác; file nguồn vẫn ở máy chủ.</p><div class="sidebar-tools"><button id="help" class="text-button" type="button"><span data-icon="help"></span>Hướng dẫn</button><button id="theme-toggle" class="icon-button" type="button" aria-label="Đổi giao diện" title="Đổi giao diện"></button></div></div>
 </aside>
 <button class="sidebar-backdrop" id="sidebar-backdrop" type="button" aria-label="Đóng danh sách dữ liệu" tabindex="-1" hidden></button>
-<main id="main">
+<main id="main" tabindex="-1">
   <header class="workspace-header">
     <button id="open-sidebar" class="icon-button mobile-only" type="button" aria-label="Mở danh sách dữ liệu" aria-expanded="false" aria-controls="sidebar" data-icon="panel"></button>
     <div class="heading-text"><h1 id="title">Hỏi từ dữ liệu của bạn</h1><p id="subtitle">Một nơi để tra cứu và đối chiếu nguồn.</p></div>
@@ -63,7 +63,7 @@
     <h3>Gộp nhiều yêu cầu, rồi hỏi tiếp</h3><p>Một tin nhắn hỗ trợ tối đa 8 intent. Bạn có thể hỏi tiếp về 2 bản ghi gần nhất đã xác định.</p>
     <h3>Kiểm tra câu trả lời với nguồn</h3><p>Mở “Đối chiếu nguồn” bên dưới từng kết quả. Khi thông tin thiếu hoặc điều kiện chưa rõ, hệ thống sẽ báo lại.</p>
     <h3>Giữ lại kết quả cần dùng</h3><p>Sao chép câu trả lời, tải bảng kết quả CSV hoặc tải hội thoại Markdown trong menu phía trên.</p>
-    <div class="help-note"><strong>Về lịch sử của bạn</strong><p>Danh sách bảng và lịch sử nằm trong phiên tab này, không đồng bộ sang máy khác. Đóng tab có thể làm mất thông tin hiển thị; file đã tải vẫn còn trên máy chủ.</p></div>
+    <div class="help-note"><strong>Về lịch sử của bạn</strong><p>Khi bật ghi nhớ, danh sách bảng và 20 lượt gần nhất được lưu trên trình duyệt này và có thể mở lại sau khi đóng tab. Không đồng bộ sang máy khác. Xóa dữ liệu trình duyệt có thể làm mất khóa truy cập. File đã tải vẫn còn trên máy chủ.</p><p>Số thập phân trên màn hình làm tròn tối đa 4 chữ số; rê chuột vào số để xem giá trị gốc. File CSV tải xuống giữ nguyên giá trị.</p></div>
     <p class="keyboard-help"><kbd>Enter</kbd> Gửi câu hỏi <kbd>Shift Enter</kbd> Xuống dòng <kbd>Ctrl K</kbd> Tìm bảng</p>
   </div>
 </dialog>

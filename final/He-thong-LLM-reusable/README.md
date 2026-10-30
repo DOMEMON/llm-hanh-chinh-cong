@@ -61,7 +61,11 @@ Ví dụ với bảng giả lập:
 
 Tối đa **8 intent/lượt**. Context giữ **hai bản ghi gần nhất được xác định**, không nhớ cả danh sách kết quả. Dataset/package version và revision bảo vệ ranh giới ngữ cảnh/ghi đồng thời.
 
-Danh sách bảng, token và lịch sử UI nằm trong `sessionStorage` của tab. Reload giữ phiên tab; đóng tab/xóa dữ liệu có thể mất danh sách hiển thị. File/context vẫn còn ở server; chưa có đồng bộ tài khoản hoặc khôi phục token đã mất.
+Tùy chọn **Ghi nhớ dữ liệu trên máy này** lưu danh sách bảng, token và tối đa 20 lượt hiển thị gần nhất trong `localStorage`, có thể mở lại sau khi đóng tab. Phiên tab cũ được chuyển sang cách lưu này. Bỏ chọn trên máy dùng chung để xóa bản lưu lâu dài và tiếp tục dùng phiên tab. File/context vẫn ở server; chưa đồng bộ giữa thiết bị hoặc khôi phục token sau khi xóa dữ liệu trình duyệt.
+
+Các intent thống kê cùng một lượt có thể tham chiếu lại nhóm đã lọc; executor kế thừa các điều kiện đã kiểm tra. Câu yêu cầu toàn bảng không tự kế thừa nhóm trước. Tham chiếu không rõ nhóm cần được làm rõ. Bộ lọc suy luận ngoại lệ trong văn bản vẫn chưa bật.
+
+UI làm tròn số thập phân để dễ đọc; tooltip, nội dung sao chép và CSV giữ giá trị gốc. Upload thất bại không công bố dataset dở dang; CSV sai mã hóa có thông báo lưu lại dưới dạng UTF-8.
 
 ## Python, API và CLI
 
@@ -92,12 +96,14 @@ Giữ token phía người gọi, không đưa vào URL, Git hay logs. Schema đ
 | --- | --- |
 | `POST /v1/datasets?filename=...` | Upload/tạo package, trả ID, source version và token |
 | `GET /v1/datasets/{id}` | Đọc profile, cần `X-Dataset-Token` |
-| `POST /v1/datasets/{id}/query` | `question` + `version`, tùy chọn cặp conversation/revision |
+| `POST /v1/datasets/{id}/query` | `question` + `version`, tùy chọn cặp conversation/revision và `request_id` |
 | `GET /v1/datasets/{id}/package` | Tải ZIP, cần token |
 | `POST /v1/datasets/{id}/conversations` | Tạo context, body `version` |
 | `GET /v1/datasets/{id}/conversations/{conversation_id}` | Đọc context/revision |
 
-Sai token/ID: 404; version/hash/revision: 409; input lỗi: 422; file quá lớn: 413; queue đầy: 429; lỗi xử lý/model: 503. `/health` không kiểm tra readiness/chất lượng model.
+Sai token/ID: 404; version/hash/revision hoặc request ID dùng cho câu khác: 409; input lỗi: 422; file quá lớn: 413; queue đầy: 429; lỗi xử lý/model: 503. `/health` báo tiến trình/hàng đợi; `/ready` kiểm tra kết nối và tên model đã nạp, trả 503 nếu model không sẵn sàng hoặc queue đầy. Hai endpoint không chứng nhận chất lượng câu trả lời.
+
+Khi gửi `request_id` cùng conversation/revision, dùng UUID cố định cho các lần thử lại của cùng lượt. Server phát lại kết quả của request gần nhất đã hoàn tất nếu ID và câu hỏi trùng, không tăng revision lần nữa. ID này yêu cầu có conversation; cache không phải kho lịch sử kết quả vô hạn. UI ngừng chờ sau 5 phút, nhưng máy chủ có thể còn xử lý; đóng tab/hết thời gian chờ không hủy job đang chạy.
 
 CLI tạo package cần model sẵn sàng; output phải là thư mục **mới**:
 
@@ -115,7 +121,7 @@ CLI tạo package cần model sẵn sàng; output phải là thư mục **mới*
 .venv/Scripts/python.exe -m pytest g85/tests g85/tabular_lab -q
 ```
 
-180 test offline kiểm tra đọc bảng, null/số lớn, schema/hash/binding, multi-intent, context/revision, token isolation, queue, cấu hình endpoint và các lỗi ràng buộc yêu cầu bảng. Model giả lập không đo accuracy LLM.
+201 test offline kiểm tra đọc bảng, null/số lớn, schema/hash/binding, multi-intent, phạm vi nhóm dùng chung, context/revision, phát lại request, token isolation, queue, readiness và rollback upload. Model giả lập không đo accuracy LLM. Kết quả hồi quy API trên 11 dataset: 218/221; ba ca `partial` do ô thiếu hoặc giới hạn số dòng được giữ nguyên. Xem [kết quả kiểm chứng](../verification/20261030/summary.json).
 
 UI acceptance dùng API giả lập, không gọi model:
 

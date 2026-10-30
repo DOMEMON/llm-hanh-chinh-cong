@@ -1,0 +1,75 @@
+{
+  "reusable_offline": {
+    "passed": 201,
+    "total": 201
+  },
+  "legal_offline": {
+    "passed": 223,
+    "total": 223
+  },
+  "reusable_live": {
+    "passed": 218,
+    "total": 221,
+    "failed": [
+      "UI-wine_red-3",
+      "UI-admin-2",
+      "UI-travel-3"
+    ]
+  },
+  "original_failures": {
+    "passed": 4,
+    "total": 4
+  },
+  "additional_scope": {
+    "passed": 4,
+    "total": 4
+  },
+  "legal_live": {
+    "passed": 142,
+    "total": 143,
+    "failed": [
+      "guard-injection:0"
+    ]
+  },
+  "browser": {
+    "checks": [
+      "Existing session migrated to persistent browser workspace",
+      "Lost response retried with same request ID, same result and revision",
+      "Closing tab and reopening preserves dataset, conversation and answer",
+      "Mobile has no horizontal overflow",
+      "CSV retains raw precision and spreadsheet formula escaping",
+      "Opt-out removes persistent credentials without breaking current session"
+    ],
+    "errors": []
+  },
+  "uploads": {
+    "before": {
+      "folders": 11,
+      "orphans": 0
+    },
+    "after": {
+      "folders": 11,
+      "orphans": 0
+    },
+    "responses": [
+      {
+        "http": 422,
+        "body": {
+          "detail": "INVALID_HEADERS_OR_TABLE_LIMIT"
+        }
+      },
+      {
+        "http": 422,
+        "body": {
+          "detail": "CSV_REQUIRES_UTF8"
+        }
+      }
+    ],
+    "ready": {
+      "status": "ready",
+      "model": "G85-Tabular-Qwen3-8B-Q4",
+      "pending": 0
+    }
+  },
+  "changed_files": 12
+}

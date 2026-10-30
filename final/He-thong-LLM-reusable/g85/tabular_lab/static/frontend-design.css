@@ -1,0 +1,155 @@
+/* Frontend Design: import-first data workspace. Native CSS, self-hosted fonts.
+   Base app.css keeps behavior and component states; this layer owns presentation.
+   Geometry: 8px controls, 12px data surfaces, 16px dialogs.
+   Layers: header 2, menu 3, backdrop 4, drawer 5, native dialogs in top layer. */
+:root {
+  --bg: #f5f8fc; --surface: #ffffff; --sidebar: #eaf0f6; --soft: #edf3f9;
+  --hover: #e2ebf4; --text: #193249; --muted: #526a7e; --line: #d5e1ec;
+  --accent: #2d5f8b; --accent-hover: #214c72; --accent-soft: #e3eef8;
+  --on-accent: #ffffff; --focus: #2d5f8b;
+  --shadow: 0 10px 34px rgb(27 63 96 / 9%);
+}
+:root[data-theme=dark] {
+  --bg: #17232f; --surface: #203242; --sidebar: #14212d; --soft: #23394a;
+  --hover: #2a4255; --text: #e6eff7; --muted: #aec1d1; --line: #365062;
+  --accent: #a0cce9; --accent-hover: #bddcf0; --accent-soft: #29465b;
+  --on-accent: #142d40; --focus: #a0cce9;
+  --shadow: 0 10px 34px rgb(4 15 25 / 18%);
+}
+body { font-size: 14px; }
+button { min-height: 44px; font-size: 13px; }
+button, input, textarea, a, summary { transition-property: background-color, color, border-color, opacity; }
+.workspace { grid-template-columns: 264px minmax(0, 1fr); }
+#sidebar { padding: 26px 17px 16px; }
+.sidebar-top { margin-bottom: 30px; padding: 0 5px; }
+.brand { gap: 10px; }
+.brand-mark { width: 38px; height: 38px; border-radius: 10px; }
+.brand strong { font-size: 17px; letter-spacing: -.45px; }
+.brand span span { font-size: 12px; margin-top: 3px; }
+.add-data { min-height: 45px; }
+.sidebar-heading { margin: 28px 8px 12px; font-size: 12px; }
+.sidebar-heading h2 { font-size: 12px; }
+.search-field input { min-height: 42px; font-size: 12px; background: var(--surface); border-color: var(--line); }
+.search-field kbd { font-size: 10px; }
+.dataset-button { min-height: 70px; padding: 12px 10px; border-radius: 9px; }
+.dataset-name { font-size: 13px; }
+.dataset-meta { font-size: 11px; margin-top: 4px; }
+.dataset-button[aria-current=true] { box-shadow: inset 3px 0 0 var(--accent); }
+.dataset-icon { width: 32px; height: 35px; }
+.empty-datasets { padding: 17px 10px; font-size: 12px; line-height: 1.85; }
+.storage-note { font-size: 11px; line-height: 1.85; padding-inline: 4px; }
+.sidebar-tools { padding-inline: 3px; }
+.sidebar-tools .text-button { font-size: 12px; }
+.icon-button { width: 40px; min-height: 40px; }
+#main { background: var(--bg); }
+#main .workspace-header { min-height: 80px; padding: 17px 36px; }
+#main h1 { font-size: 16px; letter-spacing: -.3px; }
+#subtitle { font-size: 12px; margin-top: 3px; }
+.header-actions { gap: 5px; }
+.header-actions .secondary { min-height: 40px; font-size: 12px; padding-inline: 12px; }
+.header-actions .icon-button { width: 40px; min-height: 40px; }
+.header-actions .icon { width: 18px; height: 18px; }
+.notice-slot { width: min(100%, 980px); padding-inline: 36px; }
+#notice { font-size: 13px; }
+#messages { width: min(100%, 980px); padding: 0 36px 28px; }
+#main .welcome { max-width: 740px; margin: clamp(42px, 8vh, 82px) auto 34px; }
+#main .welcome-symbol { width: 48px; height: 48px; border-radius: 12px; margin-bottom: 24px; background: var(--surface); }
+#main .welcome h2 { max-width: 640px; font-size: clamp(28px, 2.4vw, 35px); line-height: 1.42; letter-spacing: -1px; }
+#main .welcome>p { font-size: 14px; max-width: 540px; line-height: 1.85; margin-top: 15px; }
+#main .welcome-upload {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 0;
+  margin-top: 30px; padding: 29px 30px;
+  border: 1px solid var(--line); border-radius: 14px; background: var(--surface);
+  box-shadow: 0 4px 18px rgb(30 70 100 / 3%);
+}
+#main .welcome-upload:hover { border-color: var(--accent); background: var(--surface); }
+.import-formats { display: flex; gap: 7px; margin-bottom: 22px; }
+.import-formats span { color: var(--accent); background: var(--accent-soft); border: 1px solid var(--line); border-radius: 6px; padding: 5px 9px; font-size: 11px; font-weight: 500; }
+#main .welcome-upload h3 { font-size: 18px; font-weight: 600; letter-spacing: -.35px; }
+#main .welcome-upload p { font-size: 13px; line-height: 1.8; margin-top: 8px; color: var(--muted); }
+.import-action { display: inline-flex; align-items: center; justify-content: center; gap: 16px; min-height: 42px; margin-top: 24px; padding: 10px 14px; border-radius: 8px; background: var(--accent); color: var(--on-accent); font-size: 13px; font-weight: 500; }
+.import-action .icon { width: 18px; height: 18px; }
+#main .welcome-note { font-size: 12px!important; margin-top: 17px!important; }
+body[data-has-dataset=false] .composer-area { display: none; }
+.ready-label { font-size: 12px; margin-bottom: 18px; }
+.suggestions { border: 0; margin-top: 26px; gap: 9px; }
+.suggestion { justify-content: space-between; padding: 14px 16px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); font-size: 13px; min-height: 51px; }
+.suggestion:hover { background: var(--accent-soft); border-color: var(--accent); }
+.message { padding-top: 28px; }
+.user-message { font-size: 14px; line-height: 1.9; border-radius: 12px; padding: 14px 18px; max-width: 88%; background: var(--accent-soft); }
+.assistant-heading { font-size: 12px; margin-bottom: 19px; color: var(--muted); }
+.answer h3 { font-size: 15px; line-height: 1.7; }
+.answer-heading { gap: 12px; margin-bottom: 12px; }
+.answer-reason { font-size: 14px; line-height: 1.9; }
+.status { font-size: 11px; padding: 4px 8px; }
+th, td { font-size: 13px; padding: 12px 15px; line-height: 1.8; }
+th { font-weight: 500; background: var(--soft); }
+.table-wrap { border-radius: 10px; }
+.table-footer, .table-footer button, .field-values dt { font-size: 12px; }
+.field-values dd { font-size: 14px; line-height: 1.95; }
+.evidence>summary { font-size: 12px; min-height: 42px; }
+.answer-tools .text-button { font-size: 12px; }
+.turn-footer { font-size: 11px; margin-top: 14px; }
+.composer-area { width: min(100%, 980px); padding: 18px 36px 20px; }
+.composer-area label { font-size: 12px; margin-bottom: 9px; }
+.composer { border-radius: 14px; padding-top: 3px; }
+.composer textarea { font-size: 15px; min-height: 78px; padding: 15px 18px 0; line-height: 1.8; }
+.composer-bottom { padding: 9px 11px 11px 18px; }
+#composer-shortcut { font-size: 11px; }
+#context-hint { font-size: 11px; line-height: 1.8; margin-top: 9px; }
+.send-button { min-height: 40px; width: 40px; }
+.modal { border-radius: 16px; padding: 30px; }
+.dialog-header h2 { font-size: 22px; letter-spacing: -.4px; }
+.dialog-header p { font-size: 13px; line-height: 1.8; }
+.drop-zone { background: var(--soft); border-color: var(--line); }
+.drop-zone strong { font-size: 15px; }
+.file-types { color: var(--muted); font-size: 12px; }
+.advanced-options summary, .form-field label, .help-content p { font-size: 13px; }
+.help-content h3 { font-size: 14px; }
+.help-note { border-radius: 10px; }
+.help-note p { font-size: 12px; }
+@media (min-width: 1600px) {
+  #main .workspace-header { padding-inline: 52px; }
+}
+@media (max-width: 1100px) {
+  .workspace { grid-template-columns: 236px minmax(0, 1fr); }
+  #main .workspace-header { padding-inline: 26px; }
+  #messages, .composer-area, .notice-slot { padding-inline: 26px; }
+  .brand strong { font-size: 16px; }
+}
+@media (max-width: 767px) {
+  .workspace { display: block; }
+  #sidebar { width: min(300px, 88vw); padding: 24px 18px 15px; }
+  #main .workspace-header { min-height: 76px; padding: 12px 15px; gap: 8px; }
+  #main h1 { font-size: 13px; }
+  #subtitle { font-size: 11px; }
+  .header-actions { gap: 0; }
+  .header-actions .icon-button, .header-actions .secondary { width: 37px; min-height: 40px; padding: 8px; }
+  #messages, .notice-slot { padding-inline: 19px; }
+  #main .welcome { margin-top: 35px; }
+  #main .welcome h2 { font-size: 28px; line-height: 1.45; letter-spacing: -.8px; }
+  #main .welcome>p { font-size: 14px; }
+  #main .welcome-symbol { margin-bottom: 20px; }
+  #main .welcome-upload { padding: 23px 21px; margin-top: 25px; }
+  #main .welcome-upload h3 { font-size: 17px; }
+  .import-formats { margin-bottom: 19px; }
+  .import-action { margin-top: 20px; }
+  #main .welcome-note { line-height: 1.85; }
+  .composer-area { padding: 12px 15px max(14px, env(safe-area-inset-bottom)); }
+  .composer textarea { font-size: 16px; min-height: 72px; padding: 13px 14px 0; }
+  .composer-bottom { padding-left: 14px; }
+  #composer-shortcut { font-size: 9px; }
+  #context-hint { font-size: 10px; }
+  .user-message { max-width: 95%; font-size: 14px; }
+  .answer h3, .answer-reason, .field-values dd { font-size: 14px; }
+  th, td { font-size: 12px; padding: 10px 12px; }
+  .modal { padding: 23px; }
+  .dialog-header h2 { font-size: 20px; }
+  .dialog-footer button { font-size: 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  button, input, textarea, a, summary { transition: none; }
+}
+/* Workspace persistence is a compact preference, not a full-width text input. */
+label.storage-note { display:flex; align-items:center; justify-content:flex-start; gap:.6rem; }
+label.storage-note input[type="checkbox"] { appearance:auto; width:16px; height:16px; min-height:16px; flex:0 0 16px; margin:0; padding:0; }
